@@ -6,7 +6,7 @@ import {
   ArrowLeft, ChevronRight, MonitorPlay,
   Puzzle, GraduationCap, Library, Palette, Brain,
   Users, Bot, Repeat, Undo, Lightbulb,
-  Target, Handshake, Settings, ShieldCheck, Activity, Check,
+  Target, Settings, ShieldCheck, Activity, Check,
   Clock, BookOpen, Map, Award, TrendingUp, BarChart2,
   Crosshair, Zap, Shield, Search
 } from 'lucide-react';
@@ -1707,7 +1707,7 @@ function ActiveBoardSection({
                 <Repeat size={16} /> Flip
               </button>
               <button onClick={() => setGameStatus('Game Over — Draw by Agreement')} style={styles.actionButton}>
-                <Handshake size={16} /> Offer Draw
+                <Repeat size={16} /> Offer Draw
               </button>
               <button onClick={() => {
                 if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
