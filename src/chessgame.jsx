@@ -62,6 +62,7 @@ const STOCKFISH_LEVELS = [
 const STORAGE_KEYS = {
   boardTheme: 'chesssim_board_theme',
   playerRecords: 'chesssim_player_records',
+  experienceSettings: 'chesssim_experience_settings',
 };
 
 const BOARD_THEME_PRESETS = [
@@ -101,6 +102,16 @@ function buildDefaultPlayerRecords() {
   };
 }
 
+function buildDefaultExperienceSettings() {
+  return {
+    showCoordinates: true,
+    showCapturedPieces: true,
+    legalMoveIndicators: true,
+    lastMoveHighlighting: true,
+    soundEffects: true,
+  };
+}
+
 function loadStoredValue(key, fallbackFactory) {
   const fallback = fallbackFactory();
   if (typeof window === 'undefined') return fallback;
@@ -135,6 +146,41 @@ function formatPercent(value) {
 
 function formatVariantLabel(variant) {
   return variant || 'Standard';
+}
+
+function getCapturedPiecesSummary(gameInstance) {
+  if (!gameInstance) {
+    return { whiteCaptured: [], blackCaptured: [] };
+  }
+
+  const targets = { p: 8, n: 2, b: 2, r: 2, q: 1 };
+  const onBoard = {
+    w: { p: 0, n: 0, b: 0, r: 0, q: 0 },
+    b: { p: 0, n: 0, b: 0, r: 0, q: 0 },
+  };
+
+  try {
+    const board = gameInstance.board();
+    for (let rank = 0; rank < 8; rank += 1) {
+      for (let file = 0; file < 8; file += 1) {
+        const piece = board?.[rank]?.[file];
+        if (!piece || piece.type === 'k') continue;
+        onBoard[piece.color][piece.type] += 1;
+      }
+    }
+  } catch (e) {
+    return { whiteCaptured: [], blackCaptured: [] };
+  }
+
+  const expandMissing = (color) => Object.entries(targets).flatMap(([type, count]) => {
+    const missing = Math.max(0, count - (onBoard[color]?.[type] || 0));
+    return Array.from({ length: missing }, () => type.toUpperCase());
+  });
+
+  return {
+    whiteCaptured: expandMissing('b'),
+    blackCaptured: expandMissing('w'),
+  };
 }
 
 function buildChess960BackRank() {
@@ -935,6 +981,7 @@ function ActiveBoardSection({
   variant,
   assistModes,
   boardTheme,
+  experienceSettings,
   onRecordGame,
 }) {
   
@@ -1008,6 +1055,7 @@ function ActiveBoardSection({
   const [undoSnapshots, setUndoSnapshots] = useState([]);
   const [redoSnapshots, setRedoSnapshots] = useState([]);
   const [highlightedSquares, setHighlightedSquares] = useState({});
+  const [lastMoveSquares, setLastMoveSquares] = useState(null);
   const [cctReminderOpen, setCctReminderOpen] = useState(false);
   const [cctReminderText, setCctReminderText] = useState('');
   const [initialCctShown, setInitialCctShown] = useState(false);
@@ -1026,6 +1074,7 @@ function ActiveBoardSection({
     setThreeCheckCounts({ w: 0, b: 0 });
     setCrazyhousePocket(buildEmptyPocket());
     setSelectedDropPiece(null);
+    setLastMoveSquares(null);
     setUndoSnapshots([]);
     setRedoSnapshots([]);
   }, [variant]);
@@ -1113,6 +1162,7 @@ function ActiveBoardSection({
     gameStatus,
     whiteTime,
     blackTime,
+    lastMoveSquares: lastMoveSquares ? { ...lastMoveSquares } : null,
   });
 
   const restoreSnapshot = (snapshot) => {
@@ -1130,7 +1180,29 @@ function ActiveBoardSection({
     setWhiteTime(Number.isFinite(snapshot.whiteTime) ? snapshot.whiteTime : parsedInitial);
     setBlackTime(Number.isFinite(snapshot.blackTime) ? snapshot.blackTime : parsedInitial);
     setSelectedDropPiece(null);
+    setLastMoveSquares(snapshot.lastMoveSquares || null);
     setHighlightedSquares({});
+  };
+
+  const playMoveSound = () => {
+    if (!experienceSettings?.soundEffects || typeof window === 'undefined') return;
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.value = 520;
+      gain.gain.value = 0.02;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.06);
+      osc.onended = () => ctx.close().catch(() => {});
+    } catch (e) {
+      // Ignore audio failures.
+    }
   };
 
   // Expose redo snapshots for debugging in the browser console
@@ -1160,6 +1232,16 @@ function ActiveBoardSection({
   };
 
   const opponentThreats = getOpponentThreatSummary(game);
+  const capturedPieces = getCapturedPiecesSummary(game);
+  const boardSquareStyles = {
+    ...(experienceSettings?.lastMoveHighlighting && lastMoveSquares
+      ? {
+          ...(lastMoveSquares.from ? { [lastMoveSquares.from]: { boxShadow: 'inset 0 0 0 3px rgba(251,191,36,0.72)' } } : {}),
+          ...(lastMoveSquares.to ? { [lastMoveSquares.to]: { backgroundColor: 'rgba(250,204,21,0.34)' } } : {}),
+        }
+      : {}),
+    ...highlightedSquares,
+  };
 
   const getOpeningChecklistStatus = (positionGame, hist) => {
     try {
@@ -1211,7 +1293,7 @@ function ActiveBoardSection({
   };
 
   const showLegalMoveDots = (square) => {
-    if (!assistModes?.legalMoves || !game) return;
+    if (!assistModes?.legalMoves || !experienceSettings?.legalMoveIndicators || !game) return;
     try {
       const moves = game.moves({ square, verbose: true });
       const stylesLocal = {};
@@ -1517,8 +1599,10 @@ function ActiveBoardSection({
                 },
               }));
             }
+            setLastMoveSquares(chosen?.drop ? { to: chosen.drop.square } : { from: chosen?.from, to: chosen?.to });
             setUndoSnapshots((prev) => [...prev, captureSnapshot()]);
             setRedoSnapshots([]);
+            playMoveSound();
             const endedByThreeCheck = applyThreeCheckWinCondition(aiBoard, chosen.color);
             if (!endedByThreeCheck) updateGameStatusWithVariant(aiBoard);
             // Show CCT+ popup when control returns to the human player.
@@ -1572,6 +1656,7 @@ function ActiveBoardSection({
       setRedoSnapshots([]);
       setGame(gameCopy);
       setHighlightedSquares({});
+      setLastMoveSquares({ from: sourceSquare, to: targetSquare });
       if (isCrazyhouse) {
         appendMoveHistory(move.san || `${sourceSquare}-${targetSquare}`);
         if (move.captured) addCapturedToPocket(move.color, move.captured);
@@ -1588,6 +1673,7 @@ function ActiveBoardSection({
           resetMoveHistory(moveHistory);
         }
       }
+      playMoveSound();
       try {
         const endedByThreeCheck = applyThreeCheckWinCondition(gameCopy, move.color);
         if (!endedByThreeCheck) updateGameStatusWithVariant(gameCopy);
@@ -1632,6 +1718,8 @@ function ActiveBoardSection({
     }));
     appendMoveHistory(`${selectedDropPiece.toUpperCase()}@${square}`);
     setSelectedDropPiece(null);
+    setLastMoveSquares({ to: square });
+    playMoveSound();
     updateGameStatusWithVariant(dropped);
   };
 
@@ -1643,6 +1731,7 @@ function ActiveBoardSection({
     setRedoSnapshots((prev) => [...prev, currentSnapshot]);
     restoreSnapshot(previousSnapshot);
     gameRecordedRef.current = false;
+    playMoveSound();
   };
 
   const handleUndoTakeback = () => {
@@ -1653,6 +1742,7 @@ function ActiveBoardSection({
     setUndoSnapshots((prev) => [...prev, currentSnapshot]);
     restoreSnapshot(nextSnapshot);
     gameRecordedRef.current = false;
+    playMoveSound();
   };
 
   useEffect(() => {
@@ -1709,15 +1799,26 @@ function ActiveBoardSection({
               onPieceClick={(piece, square) => showLegalMoveDots(square)}
               onPieceDragBegin={(piece, square) => showLegalMoveDots(square)}
               onPieceDragEnd={() => setHighlightedSquares({})}
-              customSquareStyles={highlightedSquares}
+              customSquareStyles={boardSquareStyles}
               boardOrientation={boardOrientation}
               arePiecesDraggable={true}
+              showBoardNotation={experienceSettings?.showCoordinates !== false}
               customDarkSquareStyle={{ backgroundColor: boardTheme?.dark || DEFAULT_BOARD_THEME.dark }}
               customLightSquareStyle={{ backgroundColor: boardTheme?.light || DEFAULT_BOARD_THEME.light }}
               animationDuration={200}
             />
             {assistModes?.checkWarnings && game && game.isCheck && game.isCheck() && (
               <div style={{ marginTop: '10px', color: '#fbbf24', fontWeight: 700 }}>Check Warning: your king is currently in check.</div>
+            )}
+            {assistModes?.threatExplanation && opponentThreats.length > 0 && (
+              <div style={{ width: '100%', marginTop: '10px', padding: '10px 12px', backgroundColor: '#111827', border: '1px solid #374151', borderRadius: '10px' }}>
+                <div style={{ color: '#f8fafc', fontWeight: 700, marginBottom: '6px' }}>Threat Warnings</div>
+                <div style={{ display: 'grid', gap: '4px' }}>
+                  {opponentThreats.map((threat) => (
+                    <div key={threat} style={{ color: '#cbd5e1', fontSize: '13px' }}>{threat}</div>
+                  ))}
+                </div>
+              </div>
             )}
             {cctReminderOpen && (
               <div style={{
@@ -1752,6 +1853,18 @@ function ActiveBoardSection({
                 </div>
               </div>
             )}
+            {experienceSettings?.showCapturedPieces !== false && !isCrazyhouse && (
+              <div style={{ width: '100%', marginTop: '12px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                <div style={{ padding: '10px 12px', borderRadius: '10px', backgroundColor: '#0b1220', border: '1px solid #23303f' }}>
+                  <div style={{ color: '#94a3b8', fontSize: '12px', marginBottom: '4px' }}>White Captured</div>
+                  <div style={{ color: '#f8fafc', fontWeight: 700, minHeight: '20px' }}>{capturedPieces.whiteCaptured.join(' ') || 'None'}</div>
+                </div>
+                <div style={{ padding: '10px 12px', borderRadius: '10px', backgroundColor: '#0b1220', border: '1px solid #23303f' }}>
+                  <div style={{ color: '#94a3b8', fontSize: '12px', marginBottom: '4px' }}>Black Captured</div>
+                  <div style={{ color: '#f8fafc', fontWeight: 700, minHeight: '20px' }}>{capturedPieces.blackCaptured.join(' ') || 'None'}</div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1780,6 +1893,7 @@ function ActiveBoardSection({
                 setThreeCheckCounts({ w: 0, b: 0 });
                 setCrazyhousePocket(buildEmptyPocket());
                 setSelectedDropPiece(null);
+                setLastMoveSquares(null);
                 updateGameStatusWithVariant(newGame, { w: 0, b: 0 }, false);
                 try { setWhiteTime(parsedInitial); setBlackTime(parsedInitial); } catch (e) { console.error('Failed to reset timers', e); }
                 setUndoSnapshots([]);
@@ -1883,7 +1997,7 @@ function ActiveBoardSection({
 
 // --- 4A. Freestyle Chess (Setup & Active Gameplay) ---
 
-function FreestyleChessTab({ onBack, boardTheme, onRecordGame }) {
+function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGame }) {
   const defaultAssistModes = {
     legalMoves: false,
     checkWarnings: false,
@@ -1959,6 +2073,7 @@ function FreestyleChessTab({ onBack, boardTheme, onRecordGame }) {
         variant={setupConfig.variant}
         assistModes={setupConfig.assistModes}
         boardTheme={boardTheme}
+        experienceSettings={experienceSettings}
         onRecordGame={onRecordGame}
       />
     );
@@ -2126,19 +2241,19 @@ function FreestyleChessTab({ onBack, boardTheme, onRecordGame }) {
               <input type="checkbox" checked={setupConfig.assistModes.legalMoves} onChange={() => toggleAssist('legalMoves')} /> Legal Move Guidance
             </label>
             <label style={{ ...styles.checkboxLabel, padding: '6px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: '#ffffff' }}>
+              <input type="checkbox" checked={setupConfig.assistModes.cctPlusReminder} onChange={() => toggleAssist('cctPlusReminder')} /> CCT+ Reminder
+            </label>
+            <label style={{ ...styles.checkboxLabel, padding: '6px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: '#ffffff' }}>
+              <input type="checkbox" checked={setupConfig.assistModes.openingChecklist} onChange={() => toggleAssist('openingChecklist')} /> Opening Concept Checklist
+            </label>
+            <label style={{ ...styles.checkboxLabel, padding: '6px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: '#ffffff' }}>
+              <input type="checkbox" checked={setupConfig.assistModes.threatExplanation} onChange={() => toggleAssist('threatExplanation')} /> Threat Warnings
+            </label>
+            <label style={{ ...styles.checkboxLabel, padding: '6px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: '#ffffff' }}>
               <input type="checkbox" checked={setupConfig.assistModes.checkWarnings} onChange={() => toggleAssist('checkWarnings')} /> Check Warnings
             </label>
             <label style={{ ...styles.checkboxLabel, padding: '6px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: '#ffffff' }}>
               <input type="checkbox" checked={setupConfig.assistModes.blunderWarnings} onChange={() => toggleAssist('blunderWarnings')} /> Blunder Warnings
-            </label>
-            <label style={{ ...styles.checkboxLabel, padding: '6px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: '#ffffff' }}>
-              <input type="checkbox" checked={setupConfig.assistModes.cctPlusReminder} onChange={() => toggleAssist('cctPlusReminder')} /> CCT+ Reminder
-            </label>
-            <label style={{ ...styles.checkboxLabel, padding: '6px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: '#ffffff' }}>
-              <input type="checkbox" checked={setupConfig.assistModes.threatExplanation} onChange={() => toggleAssist('threatExplanation')} /> "What is threatened?"
-            </label>
-            <label style={{ ...styles.checkboxLabel, padding: '6px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: '#ffffff' }}>
-              <input type="checkbox" checked={setupConfig.assistModes.openingChecklist} onChange={() => toggleAssist('openingChecklist')} /> Opening Concept Checklist
             </label>
           </div>
         </div>
@@ -2597,6 +2712,35 @@ function GuessAndExplainTab({ onBack }) {
     setAssistModes((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
+  const enabledModes = [
+    ['legalMoves', 'Legal move guidance keeps candidate moves visible during pause positions.'],
+    ['cctPlusReminder', 'CCT+ reminder prompts checks, captures, and threats before you commit.'],
+    ['checkWarnings', 'Check warnings flag forced king-safety moments before the answer is shown.'],
+    ['blunderWarnings', 'Blunder warnings mark candidate moves that drop material or miss the tactic.'],
+    ['threatWarnings', 'Threat warnings explain the opponent\'s main idea before you respond.'],
+  ].filter(([key]) => assistModes[key]);
+
+  const guessAndExplainCollections = [
+    {
+      era: '19th Century (The Romantic Era)',
+      games: [
+        'The Immortal Game (1851): Adolf Anderssen vs. Lionel Kieseritzky. White sacrificed both rooks, a bishop, and his queen to checkmate Black with only three minor pieces.',
+        'The Evergreen Game (1852): Adolf Anderssen vs. Jean Dufresne. Features a brilliant queen sacrifice and a quiet king move that completely trapped the enemy king.',
+        'The Opera Game (1858): Paul Morphy vs. Duke Karl / Count Isouard. A masterclass in rapid piece development and king safety, played during an opera in Paris.',
+      ],
+    },
+    {
+      era: '20th Century (The Golden Era & World Championships)',
+      games: [
+        'The Game of the Century (1956): Donald Byrne vs. Bobby Fischer. A 13-year-old Fischer shocked the world with a brilliant queen sacrifice against a top master.',
+        'The Pearl of Zandvoort (1935): Max Euwe vs. Alexander Alekhine. A critical World Championship game featuring a stunning knight sacrifice that paved Euwe\'s path to the crown.',
+        'Game 6, World Championship (1972): Bobby Fischer vs. Boris Spassky. A positional masterpiece where Fischer opened with 1.c4, leading Spassky to join the audience in a standing ovation.',
+        'Game 24, World Championship (1985): Anatoly Karpov vs. Garry Kasparov. The final game of the match where Kasparov won the crown with a razor-sharp counterattack using the Sicilian Defense.',
+        'Kasparov\'s Immortal (1999): Garry Kasparov vs. Veselin Topalov. An incredibly complex rook sacrifice that launched a historic 15-move king hunt.',
+      ],
+    },
+  ];
+
   return (
     <div style={{ width: '100%', height: '100vh', maxHeight: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <div style={styles.header}>
@@ -2606,10 +2750,10 @@ function GuessAndExplainTab({ onBack }) {
         <h2 style={styles.dashHeaderTitle}>Guess and Explain</h2>
       </div>
 
-      <div style={{ flex: 1, maxWidth: '980px', width: '100%', margin: '0 auto', padding: '14px 24px 20px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '14px', overflow: 'hidden' }}>
+      <div style={{ flex: 1, maxWidth: '1060px', width: '100%', margin: '0 auto', padding: '14px 24px 18px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '12px', overflow: 'hidden' }}>
         <div style={{ textAlign: 'center' }}>
           <Lightbulb size={40} color="#fcd34d" style={{ marginBottom: '10px' }} />
-          <h2 style={{ fontSize: '28px', margin: '0 0 10px 0' }}>Learn While Playing</h2>
+          <h2 style={{ fontSize: '26px', margin: '0 0 8px 0' }}>Learn While Playing</h2>
           <p style={{ color: '#cbd5e1', fontSize: '18px', lineHeight: '1.6' }}>
             The system pauses famous or instructional games and asks you: <br/>
             <strong>"You are the player. What would you play?"</strong>
@@ -2643,13 +2787,44 @@ function GuessAndExplainTab({ onBack }) {
           </div>
         </div>
 
-        <div style={styles.controlBox}>
-          <div style={{ color: '#cbd5e1', fontSize: '14px', lineHeight: '1.55' }}>
-            The session will pause at key moments, compare your move with the game continuation, and explain the idea behind each turning point.
+        <div style={{ ...styles.controlBox, flex: 1, minHeight: 0, padding: '16px 18px', display: 'grid', gridTemplateColumns: '0.95fr 1.35fr', gap: '14px', overflow: 'hidden' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <h3 style={{ ...styles.controlBoxTitle, marginBottom: 0 }}>Active Session Preview</h3>
+            {enabledModes.length === 0 ? (
+              <div style={{ padding: '12px', borderRadius: '10px', backgroundColor: '#0f172a', border: '1px solid #334155', color: '#94a3b8', fontSize: '13px', lineHeight: '1.45' }}>
+                No assistance modes selected. Launch for a clean guess-first session.
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: '8px' }}>
+                {enabledModes.map(([, description]) => (
+                  <div key={description} style={{ padding: '12px', borderRadius: '10px', backgroundColor: '#0f172a', border: '1px solid #334155', color: '#cbd5e1', fontSize: '13px', lineHeight: '1.45' }}>
+                    {description}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={{ minHeight: 0 }}>
+            <h3 style={{ ...styles.controlBoxTitle, marginBottom: '10px' }}>Featured Game Collections</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+              {guessAndExplainCollections.map((collection) => (
+                <div key={collection.era} style={{ padding: '12px', borderRadius: '10px', backgroundColor: '#0f172a', border: '1px solid #334155' }}>
+                  <div style={{ color: '#f8fafc', fontWeight: 700, fontSize: '14px', marginBottom: '8px' }}>{collection.era}</div>
+                  <div style={{ display: 'grid', gap: '8px' }}>
+                    {collection.games.map((gameText) => (
+                      <div key={gameText} style={{ color: '#cbd5e1', fontSize: '12px', lineHeight: '1.45' }}>{gameText}</div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
-        <button style={{ ...styles.primaryButton, width: '100%' }}>Launch Interactive Session</button>
+        <button style={{ width: '100%', padding: '12px 18px', backgroundColor: '#334155', color: '#e2e8f0', border: '1px solid #475569', borderRadius: '10px', cursor: 'pointer', fontWeight: 700, fontSize: '14px' }}>
+          Launch Interactive Session{enabledModes.length ? ` • ${enabledModes.length} mode${enabledModes.length === 1 ? '' : 's'} active` : ''}
+        </button>
       </div>
     </div>
   );
@@ -2708,7 +2883,7 @@ function LibraryTab({ onBack }) {
 }
 
 // --- 4E. My Board (Settings) ---
-function SettingsTab({ onBack, boardTheme, setBoardTheme }) {
+function SettingsTab({ onBack, boardTheme, setBoardTheme, experienceSettings, setExperienceSettings }) {
   const [customTheme, setCustomTheme] = useState({
     dark: boardTheme?.dark || DEFAULT_BOARD_THEME.dark,
     light: boardTheme?.light || DEFAULT_BOARD_THEME.light,
@@ -2721,8 +2896,15 @@ function SettingsTab({ onBack, boardTheme, setBoardTheme }) {
     });
   }, [boardTheme]);
 
+  const updateExperienceSetting = (key) => {
+    setExperienceSettings((prev) => ({
+      ...(prev || buildDefaultExperienceSettings()),
+      [key]: !(prev || buildDefaultExperienceSettings())[key],
+    }));
+  };
+
   return (
-    <div style={{width: '100%'}}>
+    <div style={{ width: '100%', height: '100vh', maxHeight: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <div style={styles.header}>
         <button onClick={onBack} style={styles.backButton}>
           <ArrowLeft size={20} /> Back
@@ -2730,57 +2912,60 @@ function SettingsTab({ onBack, boardTheme, setBoardTheme }) {
         <h2 style={styles.dashHeaderTitle}>My Board</h2>
       </div>
 
-      <div style={{ maxWidth: '800px', margin: '40px auto', padding: '0 24px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+      <div style={{ flex: 1, maxWidth: '1040px', width: '100%', margin: '0 auto', padding: '14px 24px 18px', boxSizing: 'border-box', display: 'grid', gridTemplateColumns: '1.2fr 0.95fr', gap: '16px', overflow: 'hidden' }}>
         
-        <div style={styles.controlBox}>
+        <div style={{ ...styles.controlBox, padding: '16px 18px', overflow: 'hidden' }}>
           <h3 style={styles.controlBoxTitle}>Board Theme</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '10px' }}>
             {BOARD_THEME_PRESETS.map((theme, idx) => (
-              <button key={idx} onClick={() => setBoardTheme({ ...theme })} style={{ padding: '16px', backgroundColor: '#1e293b', border: boardTheme?.name === theme.name ? '1px solid #60a5fa' : '1px solid #334155', borderRadius: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', cursor: 'pointer' }}>
+              <button key={idx} onClick={() => setBoardTheme({ ...theme })} style={{ padding: '12px', backgroundColor: '#1e293b', border: boardTheme?.name === theme.name ? '1px solid #60a5fa' : '1px solid #334155', borderRadius: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
                 <div style={{ width: '64px', height: '64px', display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr', borderRadius: '4px', overflow: 'hidden' }}>
                   <div style={{backgroundColor: theme.light}}></div>
                   <div style={{backgroundColor: theme.dark}}></div>
                   <div style={{backgroundColor: theme.dark}}></div>
                   <div style={{backgroundColor: theme.light}}></div>
                 </div>
-                <div style={{ fontWeight: '500' }}>{theme.name}</div>
+                <div style={{ fontWeight: '500', fontSize: '12px', textAlign: 'center' }}>{theme.name}</div>
               </button>
             ))}
           </div>
 
-          <div style={{ marginTop: '18px', padding: '16px', backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: '12px', display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '14px', alignItems: 'end' }}>
+          <div style={{ marginTop: '14px', padding: '14px', backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: '12px', display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '12px', alignItems: 'end' }}>
             <div>
-              <div style={{ color: '#cbd5e1', fontWeight: 600, marginBottom: '8px' }}>Customize Light Squares</div>
+              <div style={{ color: '#cbd5e1', fontWeight: 600, marginBottom: '8px' }}>Square Color 1</div>
               <input type="color" value={customTheme.light} onChange={(e) => setCustomTheme((prev) => ({ ...prev, light: e.target.value }))} style={{ width: '100%', height: '44px', background: 'transparent', border: 'none', cursor: 'pointer' }} />
             </div>
             <div>
-              <div style={{ color: '#cbd5e1', fontWeight: 600, marginBottom: '8px' }}>Customize Dark Squares</div>
+              <div style={{ color: '#cbd5e1', fontWeight: 600, marginBottom: '8px' }}>Square Color 2</div>
               <input type="color" value={customTheme.dark} onChange={(e) => setCustomTheme((prev) => ({ ...prev, dark: e.target.value }))} style={{ width: '100%', height: '44px', background: 'transparent', border: 'none', cursor: 'pointer' }} />
             </div>
-            <button onClick={() => setBoardTheme({ name: 'Custom', dark: customTheme.dark, light: customTheme.light })} style={{ ...styles.primaryButton, width: 'auto', padding: '12px 16px' }}>
-              Apply Custom Theme
+            <button onClick={() => setBoardTheme({ name: 'Custom', dark: customTheme.dark, light: customTheme.light })} style={{ width: 'auto', padding: '12px 16px', backgroundColor: '#334155', color: '#e2e8f0', border: '1px solid #475569', borderRadius: '10px', cursor: 'pointer', fontWeight: 700 }}>
+              Apply Theme
             </button>
           </div>
         </div>
 
-        <div style={styles.controlBox}>
+        <div style={{ ...styles.controlBox, padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
           <h3 style={styles.controlBoxTitle}>Interface & Game Experience</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-            <label style={styles.checkboxLabel}>
-              <input type="checkbox" defaultChecked /> Show Coordinate Display
-            </label>
-            <label style={styles.checkboxLabel}>
-              <input type="checkbox" defaultChecked /> Show Captured Pieces
-            </label>
-            <label style={styles.checkboxLabel}>
-              <input type="checkbox" defaultChecked /> Legal-move Indicators
-            </label>
-            <label style={styles.checkboxLabel}>
-              <input type="checkbox" defaultChecked /> Last-move Highlighting
-            </label>
-            <label style={styles.checkboxLabel}>
-              <input type="checkbox" defaultChecked /> Play Sound Effects
-            </label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+            {[
+              ['showCoordinates', 'Show Coordinate Display'],
+              ['showCapturedPieces', 'Show Captured Pieces'],
+              ['legalMoveIndicators', 'Legal-move Indicators'],
+              ['lastMoveHighlighting', 'Last-move Highlighting'],
+              ['soundEffects', 'Play Sound Effects'],
+            ].map(([key, label]) => (
+              <label key={key} style={{ ...styles.checkboxLabel, padding: '12px 14px', backgroundColor: '#0f172a', borderRadius: '10px', border: '1px solid #334155', color: '#e2e8f0', display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+                <input type="checkbox" checked={!!experienceSettings?.[key]} onChange={() => updateExperienceSetting(key)} /> {label}
+              </label>
+            ))}
+          </div>
+
+          <div style={{ padding: '14px', borderRadius: '12px', backgroundColor: '#0f172a', border: '1px solid #334155', display: 'grid', gap: '8px' }}>
+            <div style={{ color: '#f8fafc', fontWeight: 700 }}>Live Board Preview</div>
+            <div style={{ color: '#cbd5e1', fontSize: '13px', lineHeight: '1.5' }}>
+              These toggles now control coordinate labels, captured pieces, legal move dots, last-move highlights, and move sounds in Freestyle Chess.
+            </div>
           </div>
         </div>
 
@@ -2810,6 +2995,23 @@ function BrainTab({ onBack, playerRecords }) {
   }, {});
   const favoriteVariant = Object.entries(variantCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || 'No games yet';
   const recentGames = games.slice(-3).reverse();
+  const strengths = [];
+  const weaknesses = [];
+
+  if ((averageAccuracy || 0) >= 70) strengths.push(`Solid match accuracy: ${formatPercent(averageAccuracy)}`);
+  else weaknesses.push(`Match accuracy needs work: ${formatPercent(averageAccuracy)}`);
+
+  if ((puzzleTotals.dailyAttempts || 0) > 0 && (puzzleTotals.dailySolves || 0) / (puzzleTotals.dailyAttempts || 1) >= 0.6) {
+    strengths.push(`Daily puzzle conversion is holding up at ${puzzleTotals.dailySolves || 0} solves.`);
+  } else {
+    weaknesses.push('Daily puzzle solve rate is still building.');
+  }
+
+  if (wins >= losses) strengths.push(`Competitive record is positive or balanced at ${wins}-${losses}-${draws}.`);
+  else weaknesses.push(`Losses currently outpace wins at ${wins}-${losses}-${draws}.`);
+
+  if ((puzzleTotals.tacticalStarts || 0) >= 3) strengths.push(`Tactical training volume is active with ${puzzleTotals.tacticalStarts} starts.`);
+  else weaknesses.push('Tactical reps are still low. Start more tactical sets to build pattern recognition.');
 
   return (
     <div style={{width: '100%'}}>
@@ -2887,6 +3089,28 @@ function BrainTab({ onBack, playerRecords }) {
           </div>
         </div>
 
+        <div style={{ ...styles.controlBox, padding: '18px 20px' }}>
+          <h3 style={{...styles.controlBoxTitle, display: 'flex', alignItems: 'center', gap: '8px'}}><Shield size={18}/> Strengths and Weaknesses</h3>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+            <div style={{ padding: '14px', borderRadius: '12px', backgroundColor: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)' }}>
+              <div style={{ color: '#4ade80', fontWeight: 700, marginBottom: '10px' }}>Strengths</div>
+              <div style={{ display: 'grid', gap: '8px' }}>
+                {(strengths.length ? strengths : ['Play more games to establish your strengths.']).map((item) => (
+                  <div key={item} style={{ color: '#d1fae5', fontSize: '14px', lineHeight: '1.45' }}>{item}</div>
+                ))}
+              </div>
+            </div>
+            <div style={{ padding: '14px', borderRadius: '12px', backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
+              <div style={{ color: '#f87171', fontWeight: 700, marginBottom: '10px' }}>Weaknesses</div>
+              <div style={{ display: 'grid', gap: '8px' }}>
+                {(weaknesses.length ? weaknesses : ['No clear weaknesses detected yet.']).map((item) => (
+                  <div key={item} style={{ color: '#fecaca', fontSize: '14px', lineHeight: '1.45' }}>{item}</div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
   );
@@ -2900,6 +3124,7 @@ export default function ChessSim() {
   const [currentView, setCurrentView] = useState('start');
   const [boardTheme, setBoardTheme] = useState(() => loadStoredValue(STORAGE_KEYS.boardTheme, () => ({ ...DEFAULT_BOARD_THEME })));
   const [playerRecords, setPlayerRecords] = useState(() => loadStoredValue(STORAGE_KEYS.playerRecords, buildDefaultPlayerRecords));
+  const [experienceSettings, setExperienceSettings] = useState(() => loadStoredValue(STORAGE_KEYS.experienceSettings, buildDefaultExperienceSettings));
 
   useEffect(() => {
     saveStoredValue(STORAGE_KEYS.boardTheme, boardTheme);
@@ -2908,6 +3133,10 @@ export default function ChessSim() {
   useEffect(() => {
     saveStoredValue(STORAGE_KEYS.playerRecords, playerRecords);
   }, [playerRecords]);
+
+  useEffect(() => {
+    saveStoredValue(STORAGE_KEYS.experienceSettings, experienceSettings);
+  }, [experienceSettings]);
 
   const handleRecordGame = (record) => {
     setPlayerRecords((prev) => {
@@ -2984,7 +3213,7 @@ export default function ChessSim() {
     </div> 
   );
       case 'play': 
-        return <FreestyleChessTab onBack={() => setCurrentView('dashboard')} boardTheme={boardTheme} onRecordGame={handleRecordGame} />;
+        return <FreestyleChessTab onBack={() => setCurrentView('dashboard')} boardTheme={boardTheme} experienceSettings={experienceSettings} onRecordGame={handleRecordGame} />;
       case 'puzzles': 
         return <PuzzlesTab onBack={() => setCurrentView('dashboard')} playerRecords={playerRecords} setPlayerRecords={setPlayerRecords} />;
       case 'analysis': 
@@ -2992,7 +3221,7 @@ export default function ChessSim() {
       case 'history': 
         return <LibraryTab onBack={() => setCurrentView('dashboard')} />;
       case 'settings': 
-        return <SettingsTab onBack={() => setCurrentView('dashboard')} boardTheme={boardTheme} setBoardTheme={setBoardTheme} />;
+        return <SettingsTab onBack={() => setCurrentView('dashboard')} boardTheme={boardTheme} setBoardTheme={setBoardTheme} experienceSettings={experienceSettings} setExperienceSettings={setExperienceSettings} />;
       case 'profile': 
         return <BrainTab onBack={() => setCurrentView('dashboard')} playerRecords={playerRecords} />;
       default: 
