@@ -1,0 +1,378 @@
+{
+  "summary": {
+    "final_accuracy": 100.0,
+    "total_classified_moves": 15,
+    "move_counts": {
+      "Best": 14,
+      "Great": 1,
+      "Brilliant": 0,
+      "Excellent": 0,
+      "Good": 0,
+      "Inaccuracy": 0,
+      "Mistake": 0,
+      "Blunder": 0
+    }
+  },
+  "per_move": [
+    {
+      "ply": 1,
+      "move_number": 1,
+      "player": "white",
+      "san": "e4",
+      "engine_lines": [
+        {
+          "san": "e4",
+          "cp": 23.0
+        },
+        {
+          "san": "c3",
+          "cp": 12.0
+        }
+      ],
+      "engine_best_san": "e4",
+      "matched_engine_index": 0,
+      "engine_best_cp": 23.0,
+      "user_cp_used": 23.0,
+      "delta_p": 0.0,
+      "move_score": 100.0,
+      "category": "Best",
+      "material_swing_for_mover": 0.0
+    },
+    {
+      "ply": 2,
+      "move_number": 1,
+      "player": "black",
+      "san": "e5",
+      "engine_lines": [
+        {
+          "san": "c5",
+          "cp": 22.0
+        },
+        {
+          "san": "e5",
+          "cp": 36.0
+        }
+      ],
+      "engine_best_san": "c5",
+      "matched_engine_index": 1,
+      "engine_best_cp": 22.0,
+      "user_cp_used": 36.0,
+      "delta_p": 0.0,
+      "move_score": 100.0,
+      "category": "Best",
+      "material_swing_for_mover": 0.0
+    },
+    {
+      "ply": 3,
+      "move_number": 2,
+      "player": "white",
+      "san": "Nf3",
+      "engine_lines": [
+        {
+          "san": "Nf3",
+          "cp": 40.0
+        },
+        {
+          "san": "Nc3",
+          "cp": 23.0
+        }
+      ],
+      "engine_best_san": "Nf3",
+      "matched_engine_index": 0,
+      "engine_best_cp": 40.0,
+      "user_cp_used": 40.0,
+      "delta_p": 0.0,
+      "move_score": 100.0,
+      "category": "Best",
+      "material_swing_for_mover": 0.0
+    },
+    {
+      "ply": 4,
+      "move_number": 2,
+      "player": "black",
+      "san": "Nc6",
+      "engine_lines": [
+        {
+          "san": "Nf6",
+          "cp": 34.0
+        },
+        {
+          "san": "d6",
+          "cp": 43.0
+        }
+      ],
+      "engine_best_san": "Nf6",
+      "matched_engine_index": null,
+      "engine_best_cp": 34.0,
+      "user_cp_used": 40.0,
+      "delta_p": 0.0,
+      "move_score": 100.0,
+      "category": "Best",
+      "material_swing_for_mover": 0.0
+    },
+    {
+      "ply": 5,
+      "move_number": 3,
+      "player": "white",
+      "san": "Bb5",
+      "engine_lines": [
+        {
+          "san": "Bb5",
+          "cp": 51.0
+        },
+        {
+          "san": "d4",
+          "cp": 29.0
+        }
+      ],
+      "engine_best_san": "Bb5",
+      "matched_engine_index": 0,
+      "engine_best_cp": 51.0,
+      "user_cp_used": 51.0,
+      "delta_p": 0.0,
+      "move_score": 100.0,
+      "category": "Best",
+      "material_swing_for_mover": 0.0
+    },
+    {
+      "ply": 6,
+      "move_number": 3,
+      "player": "black",
+      "san": "a6",
+      "engine_lines": [
+        {
+          "san": "a6",
+          "cp": 29.0
+        },
+        {
+          "san": "Nge7",
+          "cp": 52.0
+        }
+      ],
+      "engine_best_san": "a6",
+      "matched_engine_index": 0,
+      "engine_best_cp": 29.0,
+      "user_cp_used": 29.0,
+      "delta_p": 0.0,
+      "move_score": 100.0,
+      "category": "Best",
+      "material_swing_for_mover": 0.0
+    },
+    {
+      "ply": 7,
+      "move_number": 4,
+      "player": "white",
+      "san": "Ba4",
+      "engine_lines": [
+        {
+          "san": "Ba4",
+          "cp": 28.0
+        },
+        {
+          "san": "Bxc6",
+          "cp": 26.0
+        }
+      ],
+      "engine_best_san": "Ba4",
+      "matched_engine_index": 0,
+      "engine_best_cp": 28.0,
+      "user_cp_used": 28.0,
+      "delta_p": 0.0,
+      "move_score": 100.0,
+      "category": "Best",
+      "material_swing_for_mover": 0.0
+    },
+    {
+      "ply": 8,
+      "move_number": 4,
+      "player": "black",
+      "san": "Nf6",
+      "engine_lines": [
+        {
+          "san": "b5",
+          "cp": 19.0
+        },
+        {
+          "san": "Nf6",
+          "cp": 28.0
+        }
+      ],
+      "engine_best_san": "b5",
+      "matched_engine_index": 1,
+      "engine_best_cp": 19.0,
+      "user_cp_used": 28.0,
+      "delta_p": 0.0,
+      "move_score": 100.0,
+      "category": "Best",
+      "material_swing_for_mover": 0.0
+    },
+    {
+      "ply": 9,
+      "move_number": 5,
+      "player": "white",
+      "san": "O-O",
+      "engine_lines": [
+        {
+          "san": "O-O",
+          "cp": 37.0
+        },
+        {
+          "san": "d3",
+          "cp": 28.0
+        }
+      ],
+      "engine_best_san": "O-O",
+      "matched_engine_index": 0,
+      "engine_best_cp": 37.0,
+      "user_cp_used": 37.0,
+      "delta_p": 0.0,
+      "move_score": 100.0,
+      "category": "Best",
+      "material_swing_for_mover": 0.0
+    },
+    {
+      "ply": 10,
+      "move_number": 5,
+      "player": "black",
+      "san": "Be7",
+      "engine_lines": [
+        {
+          "san": "b5",
+          "cp": 37.0
+        },
+        {
+          "san": "d6",
+          "cp": 38.0
+        }
+      ],
+      "engine_best_san": "b5",
+      "matched_engine_index": null,
+      "engine_best_cp": 37.0,
+      "user_cp_used": 49.0,
+      "delta_p": 0.0,
+      "move_score": 100.0,
+      "category": "Best",
+      "material_swing_for_mover": 0.0
+    },
+    {
+      "ply": 11,
+      "move_number": 6,
+      "player": "white",
+      "san": "Re1",
+      "engine_lines": [
+        {
+          "san": "Re1",
+          "cp": 40.0
+        },
+        {
+          "san": "d4",
+          "cp": 37.0
+        }
+      ],
+      "engine_best_san": "Re1",
+      "matched_engine_index": 0,
+      "engine_best_cp": 40.0,
+      "user_cp_used": 40.0,
+      "delta_p": 0.0,
+      "move_score": 100.0,
+      "category": "Best",
+      "material_swing_for_mover": 0.0
+    },
+    {
+      "ply": 12,
+      "move_number": 6,
+      "player": "black",
+      "san": "b5",
+      "engine_lines": [
+        {
+          "san": "b5",
+          "cp": 44.0
+        },
+        {
+          "san": "d6",
+          "cp": 60.0
+        }
+      ],
+      "engine_best_san": "b5",
+      "matched_engine_index": 0,
+      "engine_best_cp": 44.0,
+      "user_cp_used": 44.0,
+      "delta_p": 0.0,
+      "move_score": 100.0,
+      "category": "Best",
+      "material_swing_for_mover": 0.0
+    },
+    {
+      "ply": 13,
+      "move_number": 7,
+      "player": "white",
+      "san": "Bb3",
+      "engine_lines": [
+        {
+          "san": "Bb3",
+          "cp": 44.0
+        },
+        {
+          "san": "d4",
+          "cp": -251.0
+        }
+      ],
+      "engine_best_san": "Bb3",
+      "matched_engine_index": 0,
+      "engine_best_cp": 44.0,
+      "user_cp_used": 44.0,
+      "delta_p": 0.0,
+      "move_score": 100.0,
+      "category": "Great",
+      "material_swing_for_mover": 0.0
+    },
+    {
+      "ply": 14,
+      "move_number": 7,
+      "player": "black",
+      "san": "O-O",
+      "engine_lines": [
+        {
+          "san": "O-O",
+          "cp": 44.0
+        },
+        {
+          "san": "d6",
+          "cp": 54.0
+        }
+      ],
+      "engine_best_san": "O-O",
+      "matched_engine_index": 0,
+      "engine_best_cp": 44.0,
+      "user_cp_used": 44.0,
+      "delta_p": 0.0,
+      "move_score": 100.0,
+      "category": "Best",
+      "material_swing_for_mover": 0.0
+    },
+    {
+      "ply": 15,
+      "move_number": 8,
+      "player": "white",
+      "san": "c3",
+      "engine_lines": [
+        {
+          "san": "c3",
+          "cp": 44.0
+        },
+        {
+          "san": "a4",
+          "cp": 31.0
+        }
+      ],
+      "engine_best_san": "c3",
+      "matched_engine_index": 0,
+      "engine_best_cp": 44.0,
+      "user_cp_used": 44.0,
+      "delta_p": 0.0,
+      "move_score": 100.0,
+      "category": "Best",
+      "material_swing_for_mover": 0.0
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+ply,move_number,player,san,engine_best_san,matched_engine_index,engine_best_cp,user_cp_used,delta_p,move_score,category
+1,1,white,e4,e4,0,23.0,23.0,0.0,100.0,Best
+2,1,black,e5,c5,1,22.0,36.0,0.0,100.0,Best
+3,2,white,Nf3,Nf3,0,40.0,40.0,0.0,100.0,Best
+4,2,black,Nc6,Nf6,,34.0,40.0,0.0,100.0,Best
+5,3,white,Bb5,Bb5,0,51.0,51.0,0.0,100.0,Best
+6,3,black,a6,a6,0,29.0,29.0,0.0,100.0,Best
+7,4,white,Ba4,Ba4,0,28.0,28.0,0.0,100.0,Best
+8,4,black,Nf6,b5,1,19.0,28.0,0.0,100.0,Best
+9,5,white,O-O,O-O,0,37.0,37.0,0.0,100.0,Best
+10,5,black,Be7,b5,,37.0,49.0,0.0,100.0,Best
+11,6,white,Re1,Re1,0,40.0,40.0,0.0,100.0,Best
+12,6,black,b5,b5,0,44.0,44.0,0.0,100.0,Best
+13,7,white,Bb3,Bb3,0,44.0,44.0,0.0,100.0,Great
+14,7,black,O-O,O-O,0,44.0,44.0,0.0,100.0,Best
+15,8,white,c3,c3,0,44.0,44.0,0.0,100.0,Best

@@ -1,0 +1,24 @@
+{
+  "name": "chesssim",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "analyze:pgn": "python3 tools/stockfish_demo.py",
+    "analyze:sample": "python3 tools/stockfish_demo.py --pgn tools/sample_game.pgn --depth 8 --multipv 2 --out tools/analysis_report"
+  },
+  "dependencies": {
+    "chess.js": "^1.0.0-beta.6",
+    "lucide-react": "^0.263.1",
+    "react": "^18.2.0",
+    "react-chessboard": "^3.1.4",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.0.3",
+    "vite": "^4.4.5"
+  }
+}
