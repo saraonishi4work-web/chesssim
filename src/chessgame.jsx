@@ -102,6 +102,22 @@ function buildDefaultPlayerRecords() {
   };
 }
 
+function resetDailyPuzzleData(records) {
+  const safeRecords = records || buildDefaultPlayerRecords();
+  return {
+    ...safeRecords,
+    puzzles: {
+      ...(safeRecords.puzzles || {}),
+      daily: {},
+      totals: {
+        ...(safeRecords.puzzles?.totals || {}),
+        dailyAttempts: 0,
+        dailySolves: 0,
+      },
+    },
+  };
+}
+
 function buildDefaultExperienceSettings() {
   return {
     showCoordinates: true,
@@ -479,9 +495,10 @@ const styles = {
     margin: '0 auto',
     alignItems: 'flex-start',
     justifyContent: 'center',
-    height: 'calc(100vh - 80px)',
+    height: 'calc(100vh - 72px)',
     boxSizing: 'border-box',
-    overflow: 'hidden',
+    overflowY: 'auto',
+    overflowX: 'hidden',
   },
   boardCard: {
     flex: '1 1 420px',
@@ -490,8 +507,10 @@ const styles = {
     borderRadius: '16px',
     border: '1px solid #334155',
     boxShadow: '0 12px 28px rgba(0, 0, 0, 0.4)',
-    maxHeight: '100%',
-    overflow: 'auto',
+    maxHeight: 'none',
+    overflow: 'visible',
+    display: 'flex',
+    flexDirection: 'column',
   },
   statusBar: {
     backgroundColor: '#0f172a',
@@ -510,8 +529,8 @@ const styles = {
     display: 'flex',
     flexDirection: 'column',
     gap: '12px',
-    maxHeight: '100%',
-    overflow: 'auto',
+    maxHeight: 'none',
+    overflow: 'visible',
   },
   controlBox: {
     backgroundColor: '#1e293b',
@@ -542,6 +561,7 @@ const styles = {
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
+    flex: '1 1 auto',
   },
   timerRow: {
     display: 'flex',
@@ -984,6 +1004,23 @@ function ActiveBoardSection({
   experienceSettings,
   onRecordGame,
 }) {
+  const [boardWidth, setBoardWidth] = useState(380);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const updateBoardWidth = () => {
+      const viewportWidth = window.innerWidth || 0;
+      const viewportHeight = window.innerHeight || 0;
+      const availableWidth = viewportWidth > 960 ? Math.floor(viewportWidth * 0.36) : Math.floor(viewportWidth - 72);
+      const availableHeight = viewportHeight > 0 ? Math.floor((viewportHeight - 260) / 1.8) : 380;
+      setBoardWidth(Math.max(300, Math.min(420, availableWidth, availableHeight)));
+    };
+
+    updateBoardWidth();
+    window.addEventListener('resize', updateBoardWidth);
+    return () => window.removeEventListener('resize', updateBoardWidth);
+  }, []);
   
   const updateGameStatus = (gameInstance) => {
     if (gameInstance.isCheckmate()) setGameStatus(`Checkmate! ${gameInstance.turn() === 'w' ? 'Black' : 'White'} Wins! 🎉`);
@@ -1793,6 +1830,7 @@ function ActiveBoardSection({
           </div>
           <div style={styles.boardInner}>
             <Chessboard
+              width={boardWidth}
               position={game ? game.fen() : 'start'}
               onPieceDrop={onPieceDrop}
               onSquareClick={onSquareClick}
@@ -2063,7 +2101,7 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
         gameStatus={gameStatus}
         setGameStatus={setGameStatus}
         gameMode={setupConfig.opponent === 'Play vs AI' ? 'ai' : 'pass-play'}
-        stockfishLevel={setupConfig.stockfishLevel}
+        stockfishLevel={4}
         boardOrientation={boardOrientation}
         setBoardOrientation={setBoardOrientation}
         moveHistory={moveHistory}
@@ -2177,12 +2215,12 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
           <h2 style={{ fontSize: '15px', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px', color: '#ffffff' }}>
             <Users size={16} color="#60a5fa" /> Opponent Types
           </h2>
-          
+
           <div style={{ display: 'flex', gap: '10px' }}>
             {['Play vs AI', 'Pass & Play', 'Play Online'].map(mode => (
-              <button 
+              <button
                 key={mode}
-                onClick={() => setSetupConfig({...setupConfig, opponent: mode})}
+                onClick={() => setSetupConfig({ ...setupConfig, opponent: mode })}
                 style={{
                   ...styles.modeButton,
                   flex: 1,
@@ -2197,38 +2235,11 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
                   gap: '6px'
                 }}
               >
-                {mode === 'Play vs AI' ? <Bot size={15}/> : mode === 'Pass & Play' ? <Users size={15}/> : <MonitorPlay size={15}/>}
+                {mode === 'Play vs AI' ? <Bot size={15} /> : mode === 'Pass & Play' ? <Users size={15} /> : <MonitorPlay size={15} />}
                 {mode}
               </button>
             ))}
           </div>
-
-          {setupConfig.opponent === 'Play vs AI' && (
-            <div style={{ marginTop: '8px' }}>
-              <label style={{ display: 'block', marginBottom: '4px', color: '#94a3b8', fontWeight: 'bold', fontSize: '12px' }}>Stockfish Level</label>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
-                {STOCKFISH_LEVELS.map((lvl) => (
-                  <button
-                    key={lvl.id}
-                    onClick={() => setSetupConfig({...setupConfig, stockfishLevel: lvl.id})}
-                    style={{
-                      padding: '8px',
-                      backgroundColor: setupConfig.stockfishLevel === lvl.id ? '#2563eb' : '#1e293b',
-                      border: '1px solid #334155',
-                      borderRadius: '10px',
-                      color: 'white',
-                      cursor: 'pointer',
-                      fontSize: '12px',
-                      fontWeight: '600',
-                      textAlign: 'left'
-                    }}
-                  >
-                    <div>{lvl.label} (~{lvl.elo} Elo)</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Assistance Modes */}
@@ -2323,16 +2334,10 @@ const activeStyles = {
 // --- 4B. Puzzles & Tactics ---
 function PuzzlesTab({ onBack, playerRecords, setPlayerRecords }) {
   const [activeTab, setActiveTab] = useState('daily');
-  const [lastSolveMessage, setLastSolveMessage] = useState('');
   const [selectedArchiveId, setSelectedArchiveId] = useState(null);
-  const [activeDailyId, setActiveDailyId] = useState('daily-1');
   const [selectedTacticalBand, setSelectedTacticalBand] = useState(null);
 
-  const dailyPuzzleSets = [
-    { id: 'daily-1', title: 'Daily Set A - Clearance Motifs', desc: '5-puzzle set focused on opening lines.' },
-    { id: 'daily-2', title: 'Daily Set B - Counterplay Triggers', desc: '5-puzzle set on practical tactical responses.' },
-    { id: 'daily-3', title: 'Daily Set C - Endgame Tactics', desc: '5-puzzle set for conversion and resource finding.' },
-  ];
+  const dailyPuzzle = { id: 'daily-1', title: 'Daily Puzzle', desc: 'One featured puzzle each day.' };
 
   const matePuzzleSets = [
     { id: 'mate-1', title: 'Mate in 1', desc: 'Spot the immediate checkmate pattern.' },
@@ -2412,7 +2417,6 @@ function PuzzlesTab({ onBack, playerRecords, setPlayerRecords }) {
   const runDailyAttempt = (dailyId) => {
     const solveSec = simulateAttemptSeconds(24, 72);
     const success = Math.random() < 0.78;
-    setActiveDailyId(dailyId);
     updatePuzzleRecords((prev) => {
       const current = prev.puzzles.daily[dailyId] || { tries: 0, solves: 0, myBest: null };
       const next = {
@@ -2433,7 +2437,6 @@ function PuzzlesTab({ onBack, playerRecords, setPlayerRecords }) {
         },
       };
     });
-    setLastSolveMessage(success ? `Daily puzzle solved in ${formatSeconds(solveSec)}` : 'Daily puzzle attempt recorded (unsolved).');
   };
 
   const runArchiveAttempt = (archiveId) => {
@@ -2460,7 +2463,6 @@ function PuzzlesTab({ onBack, playerRecords, setPlayerRecords }) {
         },
       };
     });
-    setLastSolveMessage(success ? `Archive puzzle solved in ${formatSeconds(solveSec)}` : 'Archive puzzle attempt recorded (unsolved).');
   };
 
   const runMateAttempt = (setTitle) => {
@@ -2477,11 +2479,9 @@ function PuzzlesTab({ onBack, playerRecords, setPlayerRecords }) {
         },
       },
     }));
-    setLastSolveMessage(success ? `${setTitle} solved in ${formatSeconds(solveSec)}` : `${setTitle} attempt recorded (unsolved).`);
   };
 
-  const activeDailyMeta = dailyPuzzleSets.find((d) => d.id === activeDailyId) || dailyPuzzleSets[0];
-  const activeDailyStat = dailyStats[activeDailyMeta.id] || { tries: 0, solves: 0, myBest: null };
+  const activeDailyStat = dailyStats[dailyPuzzle.id] || { tries: 0, solves: 0, myBest: null };
   const selectedArchiveMeta = archivePuzzles.find((p) => p.id === selectedArchiveId) || null;
   const selectedArchiveStat = selectedArchiveMeta
     ? (archiveStats[selectedArchiveMeta.id] || { tries: 0, solves: 0, myBest: null })
@@ -2533,24 +2533,11 @@ function PuzzlesTab({ onBack, playerRecords, setPlayerRecords }) {
         {activeTab === 'daily' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div style={{ padding: '16px', border: '1px solid #334155', borderRadius: '12px', backgroundColor: '#111827' }}>
-              <div style={{ fontSize: '18px', fontWeight: 700, color: '#f8fafc', marginBottom: '6px' }}>Daily Puzzle</div>
-              <div style={{ color: '#cbd5e1', fontSize: '14px', marginBottom: '10px' }}>Pre-made daily sets reset on refresh for a fresh training day.</div>
-              <div style={{ display: 'grid', gap: '8px' }}>
-                {dailyPuzzleSets.map((set) => (
-                  <div key={set.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', padding: '10px 12px', borderRadius: '10px', border: set.id === activeDailyMeta.id ? '1px solid #6b7280' : '1px solid #243244', backgroundColor: '#0f172a' }}>
-                    <div>
-                      <div style={{ color: '#f3f4f6', fontWeight: 600, fontSize: '13px' }}>{set.title}</div>
-                      <div style={{ color: '#94a3b8', fontSize: '12px' }}>{set.desc}</div>
-                    </div>
-                    <button
-                      onClick={() => runDailyAttempt(set.id)}
-                      style={{ ...styles.startTrainButton, backgroundColor: '#374151', color: '#f3f4f6', border: '1px solid #6b7280', padding: '8px 12px', fontSize: '12px' }}
-                    >
-                      Start
-                    </button>
-                  </div>
-                ))}
-              </div>
+              <div style={{ fontSize: '18px', fontWeight: 700, color: '#f8fafc', marginBottom: '6px' }}>{dailyPuzzle.title}</div>
+              <div style={{ color: '#cbd5e1', fontSize: '14px', marginBottom: '10px' }}>{dailyPuzzle.desc}</div>
+              <button onClick={() => runDailyAttempt(dailyPuzzle.id)} style={{ ...styles.startTrainButton, backgroundColor: '#374151', color: '#f3f4f6', border: '1px solid #6b7280', padding: '10px 14px', fontSize: '13px' }}>
+                Start Daily Puzzle
+              </button>
             </div>
 
             <div style={{ padding: '16px', border: '1px solid #334155', borderRadius: '12px', backgroundColor: '#0b1220' }}>
@@ -2575,27 +2562,26 @@ function PuzzlesTab({ onBack, playerRecords, setPlayerRecords }) {
             </div>
 
             <div style={{ padding: '16px', border: '1px solid #334155', borderRadius: '12px', backgroundColor: '#111827' }}>
-              <div style={{ fontSize: '18px', fontWeight: 700, color: '#f8fafc', marginBottom: '10px' }}>Puzzle Archive</div>
-              <div style={{ display: 'grid', gap: '8px' }}>
-                {archivePuzzles.map((p) => (
-                  <div key={p.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '10px 12px', borderRadius: '10px', border: selectedArchiveMeta && selectedArchiveMeta.id === p.id ? '1px solid #6b7280' : '1px solid #243244', backgroundColor: '#0f172a' }}>
-                    <div style={{ color: '#e5e7eb', fontSize: '13px' }}>{p.title}</div>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <button
-                        onClick={() => setSelectedArchiveId(p.id)}
-                        style={{ ...styles.startTrainButton, backgroundColor: '#1f2937', color: '#f3f4f6', border: '1px solid #4b5563', padding: '8px 10px', fontSize: '12px' }}
-                      >
-                        Select
-                      </button>
-                      <button
-                        onClick={() => runArchiveAttempt(p.id)}
-                        style={{ ...styles.startTrainButton, backgroundColor: '#374151', color: '#f3f4f6', border: '1px solid #6b7280', padding: '8px 12px', fontSize: '12px' }}
-                      >
-                        Start
-                      </button>
+              <div style={{ color: '#f8fafc', fontWeight: 700, marginBottom: '10px' }}>Puzzle Archive</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '10px' }}>
+                {archivePuzzles.map((p) => {
+                  const stat = archiveStats[p.id] || { tries: 0, solves: 0, myBest: null };
+                  return (
+                    <div key={p.id} style={{ padding: '12px', border: '1px solid #334155', borderRadius: '10px', backgroundColor: selectedArchiveMeta?.id === p.id ? '#0f172a' : '#0b1220' }}>
+                      <div style={{ color: '#e5e7eb', fontWeight: 700, fontSize: '13px', marginBottom: '8px' }}>{p.title}</div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px', marginBottom: '10px' }}>
+                        <div style={{ color: '#94a3b8', fontSize: '12px' }}>Tries: {stat.tries}</div>
+                        <div style={{ color: '#94a3b8', fontSize: '12px' }}>Solves: {stat.solves}</div>
+                        <div style={{ color: '#94a3b8', fontSize: '12px' }}>Best: {formatSeconds(stat.myBest)}</div>
+                        <div style={{ color: '#94a3b8', fontSize: '12px' }}>Rate: {stat.tries > 0 ? `${Math.round((stat.solves / stat.tries) * 100)}%` : '--'}</div>
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button onClick={() => setSelectedArchiveId(p.id)} style={{ ...styles.startTrainButton, backgroundColor: '#1f2937', color: '#f3f4f6', border: '1px solid #4b5563', padding: '8px 10px', fontSize: '12px' }}>Select</button>
+                        <button onClick={() => runArchiveAttempt(p.id)} style={{ ...styles.startTrainButton, backgroundColor: '#374151', color: '#f3f4f6', border: '1px solid #6b7280', padding: '8px 10px', fontSize: '12px' }}>Start</button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 
@@ -2679,7 +2665,6 @@ function PuzzlesTab({ onBack, playerRecords, setPlayerRecords }) {
                               },
                             },
                           }));
-                          setLastSolveMessage(`Started ${setName}`);
                         }} style={{ ...styles.startTrainButton, backgroundColor: '#374151', color: '#f3f4f6', border: '1px solid #6b7280', fontSize: '12px' }}>Start</button>
                       </div>
                     ))}
@@ -2690,9 +2675,6 @@ function PuzzlesTab({ onBack, playerRecords, setPlayerRecords }) {
           </div>
         )}
 
-        {lastSolveMessage && (
-          <div style={{ marginTop: '12px', color: '#cbd5e1', fontSize: '13px', fontWeight: 600 }}>{lastSolveMessage}</div>
-        )}
       </div>
     </div>
   );
@@ -2725,7 +2707,6 @@ function GuessAndExplainTab({ onBack }) {
       era: '19th Century (The Romantic Era)',
       games: [
         'The Immortal Game (1851): Adolf Anderssen vs. Lionel Kieseritzky. White sacrificed both rooks, a bishop, and his queen to checkmate Black with only three minor pieces.',
-        'The Evergreen Game (1852): Adolf Anderssen vs. Jean Dufresne. Features a brilliant queen sacrifice and a quiet king move that completely trapped the enemy king.',
         'The Opera Game (1858): Paul Morphy vs. Duke Karl / Count Isouard. A masterclass in rapid piece development and king safety, played during an opera in Paris.',
       ],
     },
@@ -2733,9 +2714,6 @@ function GuessAndExplainTab({ onBack }) {
       era: '20th Century (The Golden Era & World Championships)',
       games: [
         'The Game of the Century (1956): Donald Byrne vs. Bobby Fischer. A 13-year-old Fischer shocked the world with a brilliant queen sacrifice against a top master.',
-        'The Pearl of Zandvoort (1935): Max Euwe vs. Alexander Alekhine. A critical World Championship game featuring a stunning knight sacrifice that paved Euwe\'s path to the crown.',
-        'Game 6, World Championship (1972): Bobby Fischer vs. Boris Spassky. A positional masterpiece where Fischer opened with 1.c4, leading Spassky to join the audience in a standing ovation.',
-        'Game 24, World Championship (1985): Anatoly Karpov vs. Garry Kasparov. The final game of the match where Kasparov won the crown with a razor-sharp counterattack using the Sicilian Defense.',
         'Kasparov\'s Immortal (1999): Garry Kasparov vs. Veselin Topalov. An incredibly complex rook sacrifice that launched a historic 15-move king hunt.',
       ],
     },
@@ -2750,36 +2728,36 @@ function GuessAndExplainTab({ onBack }) {
         <h2 style={styles.dashHeaderTitle}>Guess and Explain</h2>
       </div>
 
-      <div style={{ flex: 1, maxWidth: '1060px', width: '100%', margin: '0 auto', padding: '14px 24px 18px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '12px', overflow: 'hidden' }}>
+      <div style={{ flex: 1, maxWidth: '1060px', width: '100%', margin: '0 auto', padding: '10px 24px 14px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px', overflow: 'hidden' }}>
         <div style={{ textAlign: 'center' }}>
-          <Lightbulb size={40} color="#fcd34d" style={{ marginBottom: '10px' }} />
-          <h2 style={{ fontSize: '26px', margin: '0 0 8px 0' }}>Learn While Playing</h2>
+          <Lightbulb size={36} color="#fcd34d" style={{ marginBottom: '8px' }} />
+          <h2 style={{ fontSize: '24px', margin: '0 0 6px 0' }}>Learn While Playing</h2>
           <p style={{ color: '#cbd5e1', fontSize: '18px', lineHeight: '1.6' }}>
             The system pauses famous or instructional games and asks you: <br/>
             <strong>"You are the player. What would you play?"</strong>
           </p>
         </div>
 
-        <div style={styles.controlBox}>
-          <h3 style={styles.controlBoxTitle}>Optional Assistance Modes</h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '10px' }}>
+        <div style={{ ...styles.controlBox, padding: '14px 16px' }}>
+          <h3 style={{ ...styles.controlBoxTitle, marginBottom: '8px' }}>Optional Assistance Modes</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '8px' }}>
               {[
                 ['legalMoves', 'Legal Move Guidance'],
                 ['cctPlusReminder', 'CCT+ Reminder'],
               ].map(([key, label]) => (
-                <label key={key} style={{ ...styles.checkboxLabel, minHeight: '52px', padding: '12px 14px', display: 'flex', alignItems: 'center', gap: '10px', fontSize: '15px', color: '#f8fafc' }}>
+                <label key={key} style={{ ...styles.checkboxLabel, minHeight: '44px', padding: '10px 12px', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: '#f8fafc' }}>
                   <input type="checkbox" checked={assistModes[key]} onChange={() => toggleAssist(key)} /> {label}
                 </label>
               ))}
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '10px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '8px' }}>
               {[
                 ['checkWarnings', 'Check Warnings'],
                 ['blunderWarnings', 'Blunder Warnings'],
                 ['threatWarnings', 'Threat Warnings'],
               ].map(([key, label]) => (
-                <label key={key} style={{ ...styles.checkboxLabel, minHeight: '52px', padding: '12px 14px', display: 'flex', alignItems: 'center', gap: '10px', fontSize: '15px', color: '#f8fafc' }}>
+                <label key={key} style={{ ...styles.checkboxLabel, minHeight: '44px', padding: '10px 12px', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: '#f8fafc' }}>
                   <input type="checkbox" checked={assistModes[key]} onChange={() => toggleAssist(key)} /> {label}
                 </label>
               ))}
@@ -2787,43 +2765,21 @@ function GuessAndExplainTab({ onBack }) {
           </div>
         </div>
 
-        <div style={{ ...styles.controlBox, flex: 1, minHeight: 0, padding: '16px 18px', display: 'grid', gridTemplateColumns: '0.95fr 1.35fr', gap: '14px', overflow: 'hidden' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <h3 style={{ ...styles.controlBoxTitle, marginBottom: 0 }}>Active Session Preview</h3>
-            {enabledModes.length === 0 ? (
-              <div style={{ padding: '12px', borderRadius: '10px', backgroundColor: '#0f172a', border: '1px solid #334155', color: '#94a3b8', fontSize: '13px', lineHeight: '1.45' }}>
-                No assistance modes selected. Launch for a clean guess-first session.
-              </div>
-            ) : (
+        <div style={{ ...styles.controlBox, flex: 1, minHeight: 0, padding: '14px 16px', overflow: 'hidden', display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '10px' }}>
+          {guessAndExplainCollections.map((collection) => (
+            <div key={collection.era} style={{ padding: '12px', borderRadius: '10px', backgroundColor: '#0f172a', border: '1px solid #334155', minHeight: 0 }}>
+              <div style={{ color: '#f8fafc', fontWeight: 700, fontSize: '14px', marginBottom: '8px' }}>{collection.era}</div>
               <div style={{ display: 'grid', gap: '8px' }}>
-                {enabledModes.map(([, description]) => (
-                  <div key={description} style={{ padding: '12px', borderRadius: '10px', backgroundColor: '#0f172a', border: '1px solid #334155', color: '#cbd5e1', fontSize: '13px', lineHeight: '1.45' }}>
-                    {description}
-                  </div>
+                {collection.games.map((gameText) => (
+                  <div key={gameText} style={{ color: '#cbd5e1', fontSize: '12px', lineHeight: '1.4' }}>{gameText}</div>
                 ))}
               </div>
-            )}
-          </div>
-
-          <div style={{ minHeight: 0 }}>
-            <h3 style={{ ...styles.controlBoxTitle, marginBottom: '10px' }}>Featured Game Collections</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-              {guessAndExplainCollections.map((collection) => (
-                <div key={collection.era} style={{ padding: '12px', borderRadius: '10px', backgroundColor: '#0f172a', border: '1px solid #334155' }}>
-                  <div style={{ color: '#f8fafc', fontWeight: 700, fontSize: '14px', marginBottom: '8px' }}>{collection.era}</div>
-                  <div style={{ display: 'grid', gap: '8px' }}>
-                    {collection.games.map((gameText) => (
-                      <div key={gameText} style={{ color: '#cbd5e1', fontSize: '12px', lineHeight: '1.45' }}>{gameText}</div>
-                    ))}
-                  </div>
-                </div>
-              ))}
             </div>
-          </div>
+          ))}
         </div>
 
         <button style={{ width: '100%', padding: '12px 18px', backgroundColor: '#334155', color: '#e2e8f0', border: '1px solid #475569', borderRadius: '10px', cursor: 'pointer', fontWeight: 700, fontSize: '14px' }}>
-          Launch Interactive Session{enabledModes.length ? ` • ${enabledModes.length} mode${enabledModes.length === 1 ? '' : 's'} active` : ''}
+          Launch Interactive Session{enabledModes.length ? ` • ${enabledModes.length} modes active` : ''}
         </button>
       </div>
     </div>
@@ -2912,42 +2868,42 @@ function SettingsTab({ onBack, boardTheme, setBoardTheme, experienceSettings, se
         <h2 style={styles.dashHeaderTitle}>My Board</h2>
       </div>
 
-      <div style={{ flex: 1, maxWidth: '1040px', width: '100%', margin: '0 auto', padding: '14px 24px 18px', boxSizing: 'border-box', display: 'grid', gridTemplateColumns: '1.2fr 0.95fr', gap: '16px', overflow: 'hidden' }}>
+      <div style={{ flex: 1, maxWidth: '1040px', width: '100%', margin: '0 auto', padding: '14px 24px 18px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '14px', overflow: 'hidden' }}>
         
-        <div style={{ ...styles.controlBox, padding: '16px 18px', overflow: 'hidden' }}>
+        <div style={{ ...styles.controlBox, padding: '12px 14px', overflow: 'hidden' }}>
           <h3 style={styles.controlBoxTitle}>Board Theme</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '10px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '8px' }}>
             {BOARD_THEME_PRESETS.map((theme, idx) => (
-              <button key={idx} onClick={() => setBoardTheme({ ...theme })} style={{ padding: '12px', backgroundColor: '#1e293b', border: boardTheme?.name === theme.name ? '1px solid #60a5fa' : '1px solid #334155', borderRadius: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                <div style={{ width: '64px', height: '64px', display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr', borderRadius: '4px', overflow: 'hidden' }}>
+              <button key={idx} onClick={() => setBoardTheme({ ...theme })} style={{ padding: '10px', backgroundColor: '#1e293b', border: boardTheme?.name === theme.name ? '1px solid #60a5fa' : '1px solid #334155', borderRadius: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                <div style={{ width: '52px', height: '52px', display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr', borderRadius: '4px', overflow: 'hidden' }}>
                   <div style={{backgroundColor: theme.light}}></div>
                   <div style={{backgroundColor: theme.dark}}></div>
                   <div style={{backgroundColor: theme.dark}}></div>
                   <div style={{backgroundColor: theme.light}}></div>
                 </div>
-                <div style={{ fontWeight: '500', fontSize: '12px', textAlign: 'center' }}>{theme.name}</div>
+                <div style={{ fontWeight: '500', fontSize: '11px', textAlign: 'center', lineHeight: 1.2 }}>{theme.name}</div>
               </button>
             ))}
           </div>
 
-          <div style={{ marginTop: '14px', padding: '14px', backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: '12px', display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '12px', alignItems: 'end' }}>
+          <div style={{ marginTop: '12px', padding: '12px', backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: '12px', display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '10px', alignItems: 'end' }}>
             <div>
-              <div style={{ color: '#cbd5e1', fontWeight: 600, marginBottom: '8px' }}>Square Color 1</div>
-              <input type="color" value={customTheme.light} onChange={(e) => setCustomTheme((prev) => ({ ...prev, light: e.target.value }))} style={{ width: '100%', height: '44px', background: 'transparent', border: 'none', cursor: 'pointer' }} />
+              <div style={{ color: '#cbd5e1', fontWeight: 600, marginBottom: '6px', fontSize: '13px' }}>Square Color 1</div>
+              <input type="color" value={customTheme.light} onChange={(e) => setCustomTheme((prev) => ({ ...prev, light: e.target.value }))} style={{ width: '100%', height: '38px', background: 'transparent', border: 'none', cursor: 'pointer' }} />
             </div>
             <div>
-              <div style={{ color: '#cbd5e1', fontWeight: 600, marginBottom: '8px' }}>Square Color 2</div>
-              <input type="color" value={customTheme.dark} onChange={(e) => setCustomTheme((prev) => ({ ...prev, dark: e.target.value }))} style={{ width: '100%', height: '44px', background: 'transparent', border: 'none', cursor: 'pointer' }} />
+              <div style={{ color: '#cbd5e1', fontWeight: 600, marginBottom: '6px', fontSize: '13px' }}>Square Color 2</div>
+              <input type="color" value={customTheme.dark} onChange={(e) => setCustomTheme((prev) => ({ ...prev, dark: e.target.value }))} style={{ width: '100%', height: '38px', background: 'transparent', border: 'none', cursor: 'pointer' }} />
             </div>
-            <button onClick={() => setBoardTheme({ name: 'Custom', dark: customTheme.dark, light: customTheme.light })} style={{ width: 'auto', padding: '12px 16px', backgroundColor: '#334155', color: '#e2e8f0', border: '1px solid #475569', borderRadius: '10px', cursor: 'pointer', fontWeight: 700 }}>
+            <button onClick={() => setBoardTheme({ name: 'Custom', dark: customTheme.dark, light: customTheme.light })} style={{ width: 'auto', padding: '10px 14px', backgroundColor: '#334155', color: '#e2e8f0', border: '1px solid #475569', borderRadius: '10px', cursor: 'pointer', fontWeight: 700, fontSize: '13px' }}>
               Apply Theme
             </button>
           </div>
         </div>
 
-        <div style={{ ...styles.controlBox, padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <div style={{ ...styles.controlBox, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
           <h3 style={styles.controlBoxTitle}>Interface & Game Experience</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
             {[
               ['showCoordinates', 'Show Coordinate Display'],
               ['showCapturedPieces', 'Show Captured Pieces'],
@@ -2955,17 +2911,10 @@ function SettingsTab({ onBack, boardTheme, setBoardTheme, experienceSettings, se
               ['lastMoveHighlighting', 'Last-move Highlighting'],
               ['soundEffects', 'Play Sound Effects'],
             ].map(([key, label]) => (
-              <label key={key} style={{ ...styles.checkboxLabel, padding: '12px 14px', backgroundColor: '#0f172a', borderRadius: '10px', border: '1px solid #334155', color: '#e2e8f0', display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+              <label key={key} style={{ ...styles.checkboxLabel, padding: '10px 12px', backgroundColor: '#0f172a', borderRadius: '10px', border: '1px solid #334155', color: '#e2e8f0', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px' }}>
                 <input type="checkbox" checked={!!experienceSettings?.[key]} onChange={() => updateExperienceSetting(key)} /> {label}
               </label>
             ))}
-          </div>
-
-          <div style={{ padding: '14px', borderRadius: '12px', backgroundColor: '#0f172a', border: '1px solid #334155', display: 'grid', gap: '8px' }}>
-            <div style={{ color: '#f8fafc', fontWeight: 700 }}>Live Board Preview</div>
-            <div style={{ color: '#cbd5e1', fontSize: '13px', lineHeight: '1.5' }}>
-              These toggles now control coordinate labels, captured pieces, legal move dots, last-move highlights, and move sounds in Freestyle Chess.
-            </div>
           </div>
         </div>
 
@@ -3014,7 +2963,7 @@ function BrainTab({ onBack, playerRecords }) {
   else weaknesses.push('Tactical reps are still low. Start more tactical sets to build pattern recognition.');
 
   return (
-    <div style={{width: '100%'}}>
+    <div style={{width: '100%', height: '100vh', maxHeight: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden'}}>
       <div style={styles.header}>
         <button onClick={onBack} style={styles.backButton}>
           <ArrowLeft size={20} /> Back
@@ -3022,31 +2971,31 @@ function BrainTab({ onBack, playerRecords }) {
         <h2 style={styles.dashHeaderTitle}>The Brain - Personal Intelligence</h2>
       </div>
 
-      <div style={{ maxWidth: '1000px', margin: '40px auto', padding: '0 24px', display: 'flex', flexDirection: 'column', gap: '32px' }}>
+      <div style={{ flex: 1, maxWidth: '1000px', width: '100%', margin: '0 auto', padding: '10px 20px 12px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '10px', overflow: 'hidden' }}>
         
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
-          <div style={{ padding: '24px', backgroundColor: 'rgba(30, 41, 59, 0.9)', borderRadius: '12px', border: '1px solid #334155', textAlign: 'center' }}>
-            <div style={{ color: '#94a3b8', marginBottom: '8px' }}>Total Games Played</div>
-            <div style={{ fontSize: '36px', fontWeight: 'bold', color: '#f8fafc' }}>{games.length}</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: '8px' }}>
+          <div style={{ padding: '12px', backgroundColor: 'rgba(30, 41, 59, 0.9)', borderRadius: '12px', border: '1px solid #334155', textAlign: 'center' }}>
+            <div style={{ color: '#94a3b8', marginBottom: '6px', fontSize: '13px' }}>Total Games Played</div>
+            <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#f8fafc' }}>{games.length}</div>
           </div>
-          <div style={{ padding: '24px', backgroundColor: 'rgba(16, 185, 129, 0.1)', borderRadius: '12px', border: '1px solid rgba(16, 185, 129, 0.2)', textAlign: 'center' }}>
-            <div style={{ color: '#4ade80', marginBottom: '8px' }}>Wins</div>
-            <div style={{ fontSize: '36px', fontWeight: 'bold', color: '#4ade80' }}>{wins}</div>
+          <div style={{ padding: '12px', backgroundColor: 'rgba(16, 185, 129, 0.1)', borderRadius: '12px', border: '1px solid rgba(16, 185, 129, 0.2)', textAlign: 'center' }}>
+            <div style={{ color: '#4ade80', marginBottom: '6px', fontSize: '13px' }}>Wins</div>
+            <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#4ade80' }}>{wins}</div>
           </div>
-          <div style={{ padding: '24px', backgroundColor: 'rgba(239, 68, 68, 0.1)', borderRadius: '12px', border: '1px solid rgba(239, 68, 68, 0.2)', textAlign: 'center' }}>
-            <div style={{ color: '#f87171', marginBottom: '8px' }}>Losses</div>
-            <div style={{ fontSize: '36px', fontWeight: 'bold', color: '#f87171' }}>{losses}</div>
+          <div style={{ padding: '12px', backgroundColor: 'rgba(239, 68, 68, 0.1)', borderRadius: '12px', border: '1px solid rgba(239, 68, 68, 0.2)', textAlign: 'center' }}>
+            <div style={{ color: '#f87171', marginBottom: '6px', fontSize: '13px' }}>Losses</div>
+            <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#f87171' }}>{losses}</div>
           </div>
-          <div style={{ padding: '24px', backgroundColor: 'rgba(245, 158, 11, 0.1)', borderRadius: '12px', border: '1px solid rgba(245, 158, 11, 0.2)', textAlign: 'center' }}>
-            <div style={{ color: '#fbbf24', marginBottom: '8px' }}>Draws</div>
-            <div style={{ fontSize: '36px', fontWeight: 'bold', color: '#fbbf24' }}>{draws}</div>
+          <div style={{ padding: '12px', backgroundColor: 'rgba(245, 158, 11, 0.1)', borderRadius: '12px', border: '1px solid rgba(245, 158, 11, 0.2)', textAlign: 'center' }}>
+            <div style={{ color: '#fbbf24', marginBottom: '6px', fontSize: '13px' }}>Draws</div>
+            <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#fbbf24' }}>{draws}</div>
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
-          <div style={styles.controlBox}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+          <div style={{ ...styles.controlBox, padding: '12px 14px', overflow: 'hidden' }}>
             <h3 style={{...styles.controlBoxTitle, display: 'flex', alignItems: 'center', gap: '8px'}}><Activity size={18}/> Live Performance Records</h3>
-            <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '8px' }}>
               {[
                 { label: 'Average Match Accuracy', val: formatPercent(averageAccuracy) },
                 { label: 'Average Game Length', val: averageMoveCount == null ? '--' : `${averageMoveCount} plies` },
@@ -3054,32 +3003,32 @@ function BrainTab({ onBack, playerRecords }) {
                 { label: 'Daily Puzzle Attempts', val: String(puzzleTotals.dailyAttempts || 0) },
                 { label: 'Puzzle Solve Rate', val: formatPercent(averagePuzzleSolveRate) }
               ].map((skill, idx) => (
-                <li key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '8px', borderBottom: '1px solid #1e293b' }}>
-                  <span style={{ color: '#cbd5e1' }}>{skill.label}</span>
+                <li key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '5px', borderBottom: '1px solid #1e293b' }}>
+                  <span style={{ color: '#cbd5e1', fontSize: '13px' }}>{skill.label}</span>
                   <span style={{ fontWeight: 'bold', color: '#e2e8f0', textAlign: 'right' }}>{skill.val}</span>
                 </li>
               ))}
             </ul>
           </div>
 
-          <div style={styles.controlBox}>
+          <div style={{ ...styles.controlBox, padding: '12px 14px', overflow: 'hidden' }}>
             <h3 style={{...styles.controlBoxTitle, display: 'flex', alignItems: 'center', gap: '8px'}}><Brain size={18}/> Tracked Activity</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <div style={{ padding: '12px', backgroundColor: 'rgba(59, 130, 246, 0.1)', borderLeft: '4px solid #3b82f6', borderRadius: '4px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{ padding: '8px 10px', backgroundColor: 'rgba(59, 130, 246, 0.1)', borderLeft: '4px solid #3b82f6', borderRadius: '4px' }}>
                 <div style={{ fontWeight: 'bold', color: '#60a5fa', marginBottom: '4px' }}>Archive Puzzle Starts</div>
-                <div style={{ fontSize: '14px', color: '#94a3b8' }}>{puzzleTotals.archiveAttempts || 0} attempts logged with {puzzleTotals.archiveSolves || 0} successful solves.</div>
+                <div style={{ fontSize: '12px', color: '#94a3b8' }}>{puzzleTotals.archiveAttempts || 0} attempts logged with {puzzleTotals.archiveSolves || 0} successful solves.</div>
               </div>
-              <div style={{ padding: '12px', backgroundColor: 'rgba(16, 185, 129, 0.1)', borderLeft: '4px solid #10b981', borderRadius: '4px' }}>
+              <div style={{ padding: '8px 10px', backgroundColor: 'rgba(16, 185, 129, 0.1)', borderLeft: '4px solid #10b981', borderRadius: '4px' }}>
                 <div style={{ fontWeight: 'bold', color: '#4ade80', marginBottom: '4px' }}>Mate Training</div>
-                <div style={{ fontSize: '14px', color: '#94a3b8' }}>{puzzleTotals.mateAttempts || 0} mate puzzles launched with {puzzleTotals.mateSolves || 0} completed.</div>
+                <div style={{ fontSize: '12px', color: '#94a3b8' }}>{puzzleTotals.mateAttempts || 0} mate puzzles launched with {puzzleTotals.mateSolves || 0} completed.</div>
               </div>
-              <div style={{ padding: '12px', backgroundColor: 'rgba(245, 158, 11, 0.1)', borderLeft: '4px solid #f59e0b', borderRadius: '4px', marginTop: '8px' }}>
-                <div style={{ fontWeight: 'bold', color: '#fbbf24', marginBottom: '8px' }}>Recent Game Log</div>
+              <div style={{ padding: '8px 10px', backgroundColor: 'rgba(245, 158, 11, 0.1)', borderLeft: '4px solid #f59e0b', borderRadius: '4px', marginTop: '4px' }}>
+                <div style={{ fontWeight: 'bold', color: '#fbbf24', marginBottom: '6px' }}>Recent Game Log</div>
                 {recentGames.length === 0 ? (
-                  <div style={{ fontSize: '14px', color: '#94a3b8' }}>Finish freestyle games to populate match history here.</div>
+                  <div style={{ fontSize: '12px', color: '#94a3b8' }}>Finish freestyle games to populate match history here.</div>
                 ) : (
                   recentGames.map((recentGame) => (
-                    <div key={recentGame.id} style={{ fontSize: '14px', color: '#cbd5e1', marginBottom: '6px' }}>
+                    <div key={recentGame.id} style={{ fontSize: '12px', color: '#cbd5e1', marginBottom: '4px' }}>
                       {formatVariantLabel(recentGame.variant)}: {recentGame.outcome.toUpperCase()} | {recentGame.moveCount} plies | {formatPercent(recentGame.accuracy)}
                     </div>
                   ))
@@ -3089,22 +3038,22 @@ function BrainTab({ onBack, playerRecords }) {
           </div>
         </div>
 
-        <div style={{ ...styles.controlBox, padding: '18px 20px' }}>
+        <div style={{ ...styles.controlBox, padding: '12px 14px' }}>
           <h3 style={{...styles.controlBoxTitle, display: 'flex', alignItems: 'center', gap: '8px'}}><Shield size={18}/> Strengths and Weaknesses</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-            <div style={{ padding: '14px', borderRadius: '12px', backgroundColor: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)' }}>
-              <div style={{ color: '#4ade80', fontWeight: 700, marginBottom: '10px' }}>Strengths</div>
-              <div style={{ display: 'grid', gap: '8px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+            <div style={{ padding: '12px', borderRadius: '12px', backgroundColor: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)' }}>
+              <div style={{ color: '#4ade80', fontWeight: 700, marginBottom: '8px' }}>Strengths</div>
+              <div style={{ display: 'grid', gap: '6px' }}>
                 {(strengths.length ? strengths : ['Play more games to establish your strengths.']).map((item) => (
-                  <div key={item} style={{ color: '#d1fae5', fontSize: '14px', lineHeight: '1.45' }}>{item}</div>
+                  <div key={item} style={{ color: '#d1fae5', fontSize: '13px', lineHeight: '1.35' }}>{item}</div>
                 ))}
               </div>
             </div>
-            <div style={{ padding: '14px', borderRadius: '12px', backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
-              <div style={{ color: '#f87171', fontWeight: 700, marginBottom: '10px' }}>Weaknesses</div>
-              <div style={{ display: 'grid', gap: '8px' }}>
+            <div style={{ padding: '12px', borderRadius: '12px', backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
+              <div style={{ color: '#f87171', fontWeight: 700, marginBottom: '8px' }}>Weaknesses</div>
+              <div style={{ display: 'grid', gap: '6px' }}>
                 {(weaknesses.length ? weaknesses : ['No clear weaknesses detected yet.']).map((item) => (
-                  <div key={item} style={{ color: '#fecaca', fontSize: '14px', lineHeight: '1.45' }}>{item}</div>
+                  <div key={item} style={{ color: '#fecaca', fontSize: '13px', lineHeight: '1.35' }}>{item}</div>
                 ))}
               </div>
             </div>
@@ -3123,8 +3072,12 @@ function BrainTab({ onBack, playerRecords }) {
 export default function ChessSim() {
   const [currentView, setCurrentView] = useState('start');
   const [boardTheme, setBoardTheme] = useState(() => loadStoredValue(STORAGE_KEYS.boardTheme, () => ({ ...DEFAULT_BOARD_THEME })));
-  const [playerRecords, setPlayerRecords] = useState(() => loadStoredValue(STORAGE_KEYS.playerRecords, buildDefaultPlayerRecords));
+  const [playerRecords, setPlayerRecords] = useState(() => resetDailyPuzzleData(loadStoredValue(STORAGE_KEYS.playerRecords, buildDefaultPlayerRecords)));
   const [experienceSettings, setExperienceSettings] = useState(() => loadStoredValue(STORAGE_KEYS.experienceSettings, buildDefaultExperienceSettings));
+
+  useEffect(() => {
+    setPlayerRecords((prev) => resetDailyPuzzleData(prev));
+  }, []);
 
   useEffect(() => {
     saveStoredValue(STORAGE_KEYS.boardTheme, boardTheme);

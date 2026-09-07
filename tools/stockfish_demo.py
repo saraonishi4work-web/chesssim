@@ -19,7 +19,6 @@ import argparse
 import json
 import math
 import csv
-import sys
 from pathlib import Path
 from typing import List, Dict, Any
 
@@ -72,7 +71,7 @@ def cp_for_player(cp_white: float, player: str) -> float:
 def material_balance_white(board: chess.Board) -> int:
     values = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3, chess.ROOK: 5, chess.QUEEN: 9}
     total = 0
-    for square, piece in board.piece_map().items():
+    for piece in board.piece_map().values():
         v = values.get(piece.piece_type, 0)
         total += v if piece.color == chess.WHITE else -v
     return total
