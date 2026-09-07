@@ -59,6 +59,84 @@ const STOCKFISH_LEVELS = [
   { id: 8, label: 'Level 8', elo: 3000, skill: 20, engineSkill: 20, depth: 22, moveTimeMs: 240, uiDelayMs: 260 },
 ];
 
+const STORAGE_KEYS = {
+  boardTheme: 'chesssim_board_theme',
+  playerRecords: 'chesssim_player_records',
+};
+
+const BOARD_THEME_PRESETS = [
+  { name: 'Classic Wood', dark: '#b58863', light: '#f0d9b5' },
+  { name: 'Light (Gray/White)', dark: '#8796a5', light: '#eceed1' },
+  { name: 'Dark (Black/Gray)', dark: '#475569', light: '#cbd5e1' },
+  { name: 'Ocean (Blue)', dark: '#4f728c', light: '#98b6c4' },
+  { name: 'Mountain (Green)', dark: '#779556', light: '#ebecd0' },
+  { name: 'Bubblegum Pink', dark: '#f472b6', light: '#fce7f3' },
+];
+
+const DEFAULT_BOARD_THEME = { ...BOARD_THEME_PRESETS[2] };
+
+function buildEmptyPocket() {
+  return {
+    w: { p: 0, n: 0, b: 0, r: 0, q: 0 },
+    b: { p: 0, n: 0, b: 0, r: 0, q: 0 },
+  };
+}
+
+function buildDefaultPlayerRecords() {
+  return {
+    games: [],
+    puzzles: {
+      daily: {},
+      archive: {},
+      totals: {
+        dailyAttempts: 0,
+        dailySolves: 0,
+        archiveAttempts: 0,
+        archiveSolves: 0,
+        mateAttempts: 0,
+        mateSolves: 0,
+        tacticalStarts: 0,
+      },
+    },
+  };
+}
+
+function loadStoredValue(key, fallbackFactory) {
+  const fallback = fallbackFactory();
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return fallback;
+    return { ...fallback, ...JSON.parse(raw) };
+  } catch (e) {
+    return fallback;
+  }
+}
+
+function saveStoredValue(key, value) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch (e) {
+    // Ignore storage failures and continue with in-memory state.
+  }
+}
+
+function average(values) {
+  const valid = (values || []).filter((value) => Number.isFinite(value));
+  if (valid.length === 0) return null;
+  return Math.round(valid.reduce((sum, value) => sum + value, 0) / valid.length);
+}
+
+function formatPercent(value) {
+  if (!Number.isFinite(value)) return '--';
+  return `${Math.round(value)}%`;
+}
+
+function formatVariantLabel(variant) {
+  return variant || 'Standard';
+}
+
 function buildChess960BackRank() {
   const squares = new Array(8).fill(null);
   const darkSquares = [0, 2, 4, 6];
@@ -856,6 +934,8 @@ function ActiveBoardSection({
   isStandardVariant,
   variant,
   assistModes,
+  boardTheme,
+  onRecordGame,
 }) {
   
   const updateGameStatus = (gameInstance) => {
@@ -925,30 +1005,29 @@ function ActiveBoardSection({
   const [whiteTime, setWhiteTime] = useState(parsedInitial);
   const [blackTime, setBlackTime] = useState(parsedInitial);
   const timerRef = React.useRef(null);
-  const [undoneMoves, setUndoneMoves] = useState([]);
+  const [undoSnapshots, setUndoSnapshots] = useState([]);
+  const [redoSnapshots, setRedoSnapshots] = useState([]);
   const [highlightedSquares, setHighlightedSquares] = useState({});
   const [cctReminderOpen, setCctReminderOpen] = useState(false);
   const [cctReminderText, setCctReminderText] = useState('');
   const [initialCctShown, setInitialCctShown] = useState(false);
   const [customGameOver, setCustomGameOver] = useState(false);
   const [threeCheckCounts, setThreeCheckCounts] = useState({ w: 0, b: 0 });
-  const [crazyhousePocket, setCrazyhousePocket] = useState({
-    w: { p: 0, n: 0, b: 0, r: 0, q: 0 },
-    b: { p: 0, n: 0, b: 0, r: 0, q: 0 },
-  });
+  const [crazyhousePocket, setCrazyhousePocket] = useState(buildEmptyPocket());
   const [selectedDropPiece, setSelectedDropPiece] = useState(null);
+  const gameRecordedRef = React.useRef(false);
 
   const isCrazyhouse = variant === 'Crazyhouse';
   const isThreeCheck = variant === 'Three-Check';
 
   useEffect(() => {
+    gameRecordedRef.current = false;
     setCustomGameOver(false);
     setThreeCheckCounts({ w: 0, b: 0 });
-    setCrazyhousePocket({
-      w: { p: 0, n: 0, b: 0, r: 0, q: 0 },
-      b: { p: 0, n: 0, b: 0, r: 0, q: 0 },
-    });
+    setCrazyhousePocket(buildEmptyPocket());
     setSelectedDropPiece(null);
+    setUndoSnapshots([]);
+    setRedoSnapshots([]);
   }, [variant]);
 
   const updateGameStatusWithVariant = (gameInstance, countsArg = threeCheckCounts, isCustomOver = customGameOver) => {
@@ -1022,10 +1101,42 @@ function ActiveBoardSection({
     }));
   };
 
-  // Expose undoneMoves for debugging in the browser console
+  const captureSnapshot = () => ({
+    fen: game?.fen?.() || createGameForVariant(variant).fen(),
+    moveHistory: Array.isArray(moveHistory) ? [...moveHistory] : [],
+    threeCheckCounts: { ...(threeCheckCounts || { w: 0, b: 0 }) },
+    crazyhousePocket: {
+      w: { ...(crazyhousePocket?.w || {}) },
+      b: { ...(crazyhousePocket?.b || {}) },
+    },
+    customGameOver: !!customGameOver,
+    gameStatus,
+    whiteTime,
+    blackTime,
+  });
+
+  const restoreSnapshot = (snapshot) => {
+    if (!snapshot) return;
+    try {
+      setGame(new Chess(snapshot.fen));
+    } catch (e) {
+      setGame(createGameForVariant(variant));
+    }
+    resetMoveHistory(snapshot.moveHistory || []);
+    setThreeCheckCounts(snapshot.threeCheckCounts || { w: 0, b: 0 });
+    setCrazyhousePocket(snapshot.crazyhousePocket || buildEmptyPocket());
+    setCustomGameOver(!!snapshot.customGameOver);
+    setGameStatus(snapshot.gameStatus || "White's Turn");
+    setWhiteTime(Number.isFinite(snapshot.whiteTime) ? snapshot.whiteTime : parsedInitial);
+    setBlackTime(Number.isFinite(snapshot.blackTime) ? snapshot.blackTime : parsedInitial);
+    setSelectedDropPiece(null);
+    setHighlightedSquares({});
+  };
+
+  // Expose redo snapshots for debugging in the browser console
   useEffect(() => {
-    try { window.__undoneMoves = Array.isArray(undoneMoves) ? undoneMoves : []; } catch (e) {}
-  }, [undoneMoves]);
+    try { window.__undoneMoves = Array.isArray(redoSnapshots) ? redoSnapshots : []; } catch (e) {}
+  }, [redoSnapshots]);
 
   const withTurn = (fen, turn) => {
     const parts = String(fen || '').split(' ');
@@ -1406,7 +1517,8 @@ function ActiveBoardSection({
                 },
               }));
             }
-            setUndoneMoves([]);
+            setUndoSnapshots((prev) => [...prev, captureSnapshot()]);
+            setRedoSnapshots([]);
             const endedByThreeCheck = applyThreeCheckWinCondition(aiBoard, chosen.color);
             if (!endedByThreeCheck) updateGameStatusWithVariant(aiBoard);
             // Show CCT+ popup when control returns to the human player.
@@ -1456,8 +1568,9 @@ function ActiveBoardSection({
       }
 
       // Update state for human move (AI move is picked up by useEffect automatically)
+      setUndoSnapshots((prev) => [...prev, captureSnapshot()]);
+      setRedoSnapshots([]);
       setGame(gameCopy);
-      setUndoneMoves([]);
       setHighlightedSquares({});
       if (isCrazyhouse) {
         appendMoveHistory(move.san || `${sourceSquare}-${targetSquare}`);
@@ -1507,6 +1620,8 @@ function ActiveBoardSection({
     const dropped = applyCrazyhouseDrop(game, selectedDropPiece, square);
     if (!dropped) return;
 
+    setUndoSnapshots((prev) => [...prev, captureSnapshot()]);
+    setRedoSnapshots([]);
     setGame(dropped);
     setCrazyhousePocket((prev) => ({
       ...prev,
@@ -1520,108 +1635,55 @@ function ActiveBoardSection({
     updateGameStatusWithVariant(dropped);
   };
 
-  // Takeback: remove the last single ply (one SAN) and push that SAN onto a redo stack
   const handleUndo = () => {
-    if (isCrazyhouse) {
-      setGameStatus('Takeback is not available in Crazyhouse yet.');
-      return;
-    }
-    if (!game) return;
-    const history = (game && typeof game.history === 'function') ? game.history() : [];
-    if (!history || history.length === 0) return;
-
-    // remove exactly one ply (last SAN) and capture verbose move info for reliable redo
-    const removedSan = history[history.length - 1];
-    // build verbose moves to capture from/to/promotion
-    const recorder = new Chess();
-    const verboseMoves = [];
-    try {
-      for (const s of history) {
-        const mv = recorder.move(s);
-        verboseMoves.push(mv);
-      }
-    } catch (e) {
-      console.warn('Could not build verbose moves for recorder', e);
-    }
-    const removedVerbose = verboseMoves.length ? verboseMoves[verboseMoves.length - 1] : null;
-    const remaining = history.slice(0, history.length - 1);
-
-    // Rebuild a temp game from the remaining SANs to ensure validity
-    const tempGame = new Chess();
-    let ok = true;
-    try {
-      for (const san of remaining) {
-        const mv = tempGame.move(san);
-        if (!mv) { ok = false; break; }
-      }
-    } catch (e) {
-      console.error('Error rebuilding game after takeback', e);
-      ok = false;
-    }
-
-    if (!ok) {
-      console.error('Takeback aborted: could not rebuild game from remaining history.');
-      return;
-    }
-
-    // push the single SAN and its verbose info onto undoneMoves for redo
-    setUndoneMoves((prev) => [...prev, { san: removedSan, info: removedVerbose }]);
-    setGame(tempGame);
-    try {
-      const th = tempGame.history();
-      resetMoveHistory(th);
-      try { window.__lastGameHistory = th; console.log('DEBUG: takeback history', window.__lastGameHistory); } catch (e) {}
-    } catch (e) { resetMoveHistory([]); }
-    updateGameStatusWithVariant(tempGame);
+    if (undoSnapshots.length === 0) return;
+    const previousSnapshot = undoSnapshots[undoSnapshots.length - 1];
+    const currentSnapshot = captureSnapshot();
+    setUndoSnapshots((prev) => prev.slice(0, -1));
+    setRedoSnapshots((prev) => [...prev, currentSnapshot]);
+    restoreSnapshot(previousSnapshot);
+    gameRecordedRef.current = false;
   };
 
-  // Redo a single previously taken-back ply (reapply the last SAN)
   const handleUndoTakeback = () => {
-    if (isCrazyhouse) {
-      setGameStatus('Undo Takeback is not available in Crazyhouse yet.');
-      return;
-    }
-    if (!game) return;
-    if (!undoneMoves || undoneMoves.length === 0) return;
-
-    const lastEntry = undoneMoves[undoneMoves.length - 1];
-
-    try {
-      const newGame = cloneFromHistory(game);
-
-      // Support both legacy string SAN entries and new { san, info } entries
-      let mv = null;
-      if (typeof lastEntry === 'string') {
-        mv = newGame.move(lastEntry);
-      } else if (lastEntry && typeof lastEntry === 'object') {
-        const info = lastEntry.info || {};
-        if (info.from && info.to) {
-          mv = newGame.move({ from: info.from, to: info.to, promotion: info.promotion || 'q' });
-        }
-        if (!mv && lastEntry.san) {
-          mv = newGame.move(lastEntry.san);
-        }
-      }
-
-      if (!mv) {
-        console.error('Redo aborted: move invalid on current position', lastEntry);
-        return;
-      }
-
-      // Success: remove last undone entry and commit new game state
-      setUndoneMoves((prev) => prev.slice(0, -1));
-      setGame(newGame);
-      try {
-        const th2 = newGame.history();
-        resetMoveHistory(th2);
-        try { window.__lastGameHistory = th2; } catch (e) {}
-        console.log('Redo applied:', mv);
-      } catch (e) { resetMoveHistory([]); }
-      updateGameStatusWithVariant(newGame);
-    } catch (e) {
-      console.error('Redo failed', e);
-    }
+    if (redoSnapshots.length === 0) return;
+    const nextSnapshot = redoSnapshots[redoSnapshots.length - 1];
+    const currentSnapshot = captureSnapshot();
+    setRedoSnapshots((prev) => prev.slice(0, -1));
+    setUndoSnapshots((prev) => [...prev, currentSnapshot]);
+    restoreSnapshot(nextSnapshot);
+    gameRecordedRef.current = false;
   };
+
+  useEffect(() => {
+    if (!onRecordGame || !game) return;
+    if (gameRecordedRef.current) return;
+
+    const statusText = String(gameStatus || '');
+    const isFinished = customGameOver || /Wins|Draw|Resigned|Time Out/.test(statusText) || (game.isGameOver && game.isGameOver());
+    if (!isFinished) return;
+
+    let outcome = null;
+    if (statusText.includes('Draw')) {
+      outcome = 'draw';
+    } else if (statusText.includes('White Wins')) {
+      outcome = boardOrientation === 'white' ? 'win' : 'loss';
+    } else if (statusText.includes('Black Wins')) {
+      outcome = boardOrientation === 'black' ? 'win' : 'loss';
+    }
+
+    if (!outcome) return;
+
+    onRecordGame({
+      id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+      outcome,
+      variant,
+      moveCount: Array.isArray(moveHistory) ? moveHistory.length : 0,
+      accuracy: boardOrientation === 'white' ? displayedAccuracyWhite : displayedAccuracyBlack,
+      recordedAt: Date.now(),
+    });
+    gameRecordedRef.current = true;
+  }, [onRecordGame, game, gameStatus, customGameOver, boardOrientation, variant, moveHistory, displayedAccuracyWhite, displayedAccuracyBlack]);
 
   return (
     <div style={{ width: '100%' }}>
@@ -1650,8 +1712,8 @@ function ActiveBoardSection({
               customSquareStyles={highlightedSquares}
               boardOrientation={boardOrientation}
               arePiecesDraggable={true}
-              customDarkSquareStyle={{ backgroundColor: '#475569' }}
-              customLightSquareStyle={{ backgroundColor: '#cbd5e1' }}
+              customDarkSquareStyle={{ backgroundColor: boardTheme?.dark || DEFAULT_BOARD_THEME.dark }}
+              customLightSquareStyle={{ backgroundColor: boardTheme?.light || DEFAULT_BOARD_THEME.light }}
               animationDuration={200}
             />
             {assistModes?.checkWarnings && game && game.isCheck && game.isCheck() && (
@@ -1700,7 +1762,7 @@ function ActiveBoardSection({
               <button onClick={handleUndo} style={styles.actionButton}>
                 <Undo size={16} /> Takeback
               </button>
-              <button onClick={handleUndoTakeback} style={styles.actionButton} disabled={!undoneMoves || undoneMoves.length === 0}>
+              <button onClick={handleUndoTakeback} style={styles.actionButton} disabled={!redoSnapshots || redoSnapshots.length === 0}>
                 <ChevronRight size={16} /> Undo Takeback
               </button>
               <button onClick={() => setBoardOrientation((prev) => (prev === 'white' ? 'black' : 'white'))} style={styles.actionButton}>
@@ -1716,14 +1778,13 @@ function ActiveBoardSection({
                 setMoveHistory([]);
                 setCustomGameOver(false);
                 setThreeCheckCounts({ w: 0, b: 0 });
-                setCrazyhousePocket({
-                  w: { p: 0, n: 0, b: 0, r: 0, q: 0 },
-                  b: { p: 0, n: 0, b: 0, r: 0, q: 0 },
-                });
+                setCrazyhousePocket(buildEmptyPocket());
                 setSelectedDropPiece(null);
                 updateGameStatusWithVariant(newGame, { w: 0, b: 0 }, false);
                 try { setWhiteTime(parsedInitial); setBlackTime(parsedInitial); } catch (e) { console.error('Failed to reset timers', e); }
-                setUndoneMoves([]);
+                setUndoSnapshots([]);
+                setRedoSnapshots([]);
+                gameRecordedRef.current = false;
                 setCctReminderOpen(false);
                 setCctReminderText('');
                 setInitialCctShown(false);
@@ -1822,7 +1883,7 @@ function ActiveBoardSection({
 
 // --- 4A. Freestyle Chess (Setup & Active Gameplay) ---
 
-function FreestyleChessTab({ onBack }) {
+function FreestyleChessTab({ onBack, boardTheme, onRecordGame }) {
   const defaultAssistModes = {
     legalMoves: false,
     checkWarnings: false,
@@ -1897,6 +1958,8 @@ function FreestyleChessTab({ onBack }) {
         isStandardVariant={isStandardVariant}
         variant={setupConfig.variant}
         assistModes={setupConfig.assistModes}
+        boardTheme={boardTheme}
+        onRecordGame={onRecordGame}
       />
     );
   }
@@ -2143,19 +2206,17 @@ const activeStyles = {
 
 
 // --- 4B. Puzzles & Tactics ---
-function PuzzlesTab({ onBack }) {
+function PuzzlesTab({ onBack, playerRecords, setPlayerRecords }) {
   const [activeTab, setActiveTab] = useState('daily');
   const [lastSolveMessage, setLastSolveMessage] = useState('');
   const [selectedArchiveId, setSelectedArchiveId] = useState(null);
-  const [dailyStats, setDailyStats] = useState({});
-  const [archiveStats, setArchiveStats] = useState({});
   const [activeDailyId, setActiveDailyId] = useState('daily-1');
   const [selectedTacticalBand, setSelectedTacticalBand] = useState(null);
 
   const dailyPuzzleSets = [
-    { id: 'daily-1', title: 'Daily Set A - Clearance Motifs', desc: '5-puzzle set focused on opening lines.', dailyBest: 41 },
-    { id: 'daily-2', title: 'Daily Set B - Counterplay Triggers', desc: '5-puzzle set on practical tactical responses.', dailyBest: 47 },
-    { id: 'daily-3', title: 'Daily Set C - Endgame Tactics', desc: '5-puzzle set for conversion and resource finding.', dailyBest: 52 },
+    { id: 'daily-1', title: 'Daily Set A - Clearance Motifs', desc: '5-puzzle set focused on opening lines.' },
+    { id: 'daily-2', title: 'Daily Set B - Counterplay Triggers', desc: '5-puzzle set on practical tactical responses.' },
+    { id: 'daily-3', title: 'Daily Set C - Endgame Tactics', desc: '5-puzzle set for conversion and resource finding.' },
   ];
 
   const matePuzzleSets = [
@@ -2166,10 +2227,10 @@ function PuzzlesTab({ onBack }) {
   ];
 
   const archivePuzzles = [
-    { id: 'a-4721', title: 'Archive #4721 - Back Rank Pattern', dailyBest: 44, bestAllTime: 31 },
-    { id: 'a-4684', title: 'Archive #4684 - Decoy Tactic', dailyBest: 36, bestAllTime: 27 },
-    { id: 'a-4612', title: 'Archive #4612 - Defensive Resource', dailyBest: 55, bestAllTime: 39 },
-    { id: 'a-4550', title: 'Archive #4550 - Zwischenzug Shot', dailyBest: 33, bestAllTime: 24 },
+    { id: 'a-4721', title: 'Archive #4721 - Back Rank Pattern' },
+    { id: 'a-4684', title: 'Archive #4684 - Decoy Tactic' },
+    { id: 'a-4612', title: 'Archive #4612 - Defensive Resource' },
+    { id: 'a-4550', title: 'Archive #4550 - Zwischenzug Shot' },
   ];
 
   const tacticalCatalog = {
@@ -2223,18 +2284,39 @@ function PuzzlesTab({ onBack }) {
 
   const simulateAttemptSeconds = (low = 26, high = 76) => low + Math.floor(Math.random() * Math.max(1, high - low + 1));
 
+  const dailyStats = playerRecords?.puzzles?.daily || {};
+  const archiveStats = playerRecords?.puzzles?.archive || {};
+
+  const updatePuzzleRecords = (updater) => {
+    setPlayerRecords((prev) => {
+      const safePrev = prev || buildDefaultPlayerRecords();
+      return updater(safePrev);
+    });
+  };
+
   const runDailyAttempt = (dailyId) => {
     const solveSec = simulateAttemptSeconds(24, 72);
     const success = Math.random() < 0.78;
     setActiveDailyId(dailyId);
-    setDailyStats((prev) => {
-      const cur = prev[dailyId] || { tries: 0, solves: 0, myDailyBest: null };
+    updatePuzzleRecords((prev) => {
+      const current = prev.puzzles.daily[dailyId] || { tries: 0, solves: 0, myBest: null };
       const next = {
-        tries: cur.tries + 1,
-        solves: cur.solves + (success ? 1 : 0),
-        myDailyBest: success ? (cur.myDailyBest == null ? solveSec : Math.min(cur.myDailyBest, solveSec)) : cur.myDailyBest,
+        tries: current.tries + 1,
+        solves: current.solves + (success ? 1 : 0),
+        myBest: success ? (current.myBest == null ? solveSec : Math.min(current.myBest, solveSec)) : current.myBest,
       };
-      return { ...prev, [dailyId]: next };
+      return {
+        ...prev,
+        puzzles: {
+          ...prev.puzzles,
+          daily: { ...prev.puzzles.daily, [dailyId]: next },
+          totals: {
+            ...prev.puzzles.totals,
+            dailyAttempts: (prev.puzzles.totals.dailyAttempts || 0) + 1,
+            dailySolves: (prev.puzzles.totals.dailySolves || 0) + (success ? 1 : 0),
+          },
+        },
+      };
     });
     setLastSolveMessage(success ? `Daily puzzle solved in ${formatSeconds(solveSec)}` : 'Daily puzzle attempt recorded (unsolved).');
   };
@@ -2243,15 +2325,25 @@ function PuzzlesTab({ onBack }) {
     const solveSec = simulateAttemptSeconds(22, 82);
     const success = Math.random() < 0.72;
     setSelectedArchiveId(archiveId);
-    setArchiveStats((prev) => {
-      const cur = prev[archiveId] || { tries: 0, solves: 0, myBest: null, myDailyBest: null };
+    updatePuzzleRecords((prev) => {
+      const current = prev.puzzles.archive[archiveId] || { tries: 0, solves: 0, myBest: null };
       const next = {
-        tries: cur.tries + 1,
-        solves: cur.solves + (success ? 1 : 0),
-        myBest: success ? (cur.myBest == null ? solveSec : Math.min(cur.myBest, solveSec)) : cur.myBest,
-        myDailyBest: success ? (cur.myDailyBest == null ? solveSec : Math.min(cur.myDailyBest, solveSec)) : cur.myDailyBest,
+        tries: current.tries + 1,
+        solves: current.solves + (success ? 1 : 0),
+        myBest: success ? (current.myBest == null ? solveSec : Math.min(current.myBest, solveSec)) : current.myBest,
       };
-      return { ...prev, [archiveId]: next };
+      return {
+        ...prev,
+        puzzles: {
+          ...prev.puzzles,
+          archive: { ...prev.puzzles.archive, [archiveId]: next },
+          totals: {
+            ...prev.puzzles.totals,
+            archiveAttempts: (prev.puzzles.totals.archiveAttempts || 0) + 1,
+            archiveSolves: (prev.puzzles.totals.archiveSolves || 0) + (success ? 1 : 0),
+          },
+        },
+      };
     });
     setLastSolveMessage(success ? `Archive puzzle solved in ${formatSeconds(solveSec)}` : 'Archive puzzle attempt recorded (unsolved).');
   };
@@ -2259,15 +2351,29 @@ function PuzzlesTab({ onBack }) {
   const runMateAttempt = (setTitle) => {
     const solveSec = simulateAttemptSeconds(18, 64);
     const success = Math.random() < 0.8;
+    updatePuzzleRecords((prev) => ({
+      ...prev,
+      puzzles: {
+        ...prev.puzzles,
+        totals: {
+          ...prev.puzzles.totals,
+          mateAttempts: (prev.puzzles.totals.mateAttempts || 0) + 1,
+          mateSolves: (prev.puzzles.totals.mateSolves || 0) + (success ? 1 : 0),
+        },
+      },
+    }));
     setLastSolveMessage(success ? `${setTitle} solved in ${formatSeconds(solveSec)}` : `${setTitle} attempt recorded (unsolved).`);
   };
 
   const activeDailyMeta = dailyPuzzleSets.find((d) => d.id === activeDailyId) || dailyPuzzleSets[0];
-  const activeDailyStat = dailyStats[activeDailyMeta.id] || { tries: 0, solves: 0, myDailyBest: null };
+  const activeDailyStat = dailyStats[activeDailyMeta.id] || { tries: 0, solves: 0, myBest: null };
   const selectedArchiveMeta = archivePuzzles.find((p) => p.id === selectedArchiveId) || null;
   const selectedArchiveStat = selectedArchiveMeta
-    ? (archiveStats[selectedArchiveMeta.id] || { tries: 0, solves: 0, myBest: null, myDailyBest: null })
-    : { tries: 0, solves: 0, myBest: null, myDailyBest: null };
+    ? (archiveStats[selectedArchiveMeta.id] || { tries: 0, solves: 0, myBest: null })
+    : { tries: 0, solves: 0, myBest: null };
+
+  const activeDailySolveRate = activeDailyStat.tries > 0 ? Math.round((activeDailyStat.solves / activeDailyStat.tries) * 100) : null;
+  const selectedArchiveSolveRate = selectedArchiveStat.tries > 0 ? Math.round((selectedArchiveStat.solves / selectedArchiveStat.tries) * 100) : null;
 
   return (
     <div style={{width: '100%'}}>
@@ -2335,12 +2441,12 @@ function PuzzlesTab({ onBack }) {
             <div style={{ padding: '16px', border: '1px solid #334155', borderRadius: '12px', backgroundColor: '#0b1220' }}>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px' }}>
                 <div>
-                  <div style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase', marginBottom: '4px' }}>Daily Best</div>
-                  <div style={{ color: '#f8fafc', fontWeight: 700, fontSize: '22px' }}>{formatSeconds(activeDailyMeta.dailyBest)}</div>
+                  <div style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase', marginBottom: '4px' }}>My Best</div>
+                  <div style={{ color: '#f8fafc', fontWeight: 700, fontSize: '22px' }}>{formatSeconds(activeDailyStat.myBest)}</div>
                 </div>
                 <div>
-                  <div style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase', marginBottom: '4px' }}>My Daily Best</div>
-                  <div style={{ color: '#f8fafc', fontWeight: 700, fontSize: '22px' }}>{formatSeconds(activeDailyStat.myDailyBest)}</div>
+                  <div style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase', marginBottom: '4px' }}>Solve Rate</div>
+                  <div style={{ color: '#f8fafc', fontWeight: 700, fontSize: '22px' }}>{activeDailySolveRate == null ? '--' : `${activeDailySolveRate}%`}</div>
                 </div>
                 <div>
                   <div style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase', marginBottom: '4px' }}>Total Tries</div>
@@ -2382,10 +2488,8 @@ function PuzzlesTab({ onBack }) {
               <div style={{ padding: '16px', border: '1px solid #334155', borderRadius: '12px', backgroundColor: '#0b1220' }}>
                 <div style={{ color: '#f8fafc', fontWeight: 700, marginBottom: '10px' }}>Selected Archive Record: {selectedArchiveMeta.title}</div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '10px' }}>
-                  <div><div style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase' }}>Daily Best</div><div style={{ color: '#f8fafc', fontSize: '20px', fontWeight: 700 }}>{formatSeconds(selectedArchiveMeta.dailyBest)}</div></div>
-                  <div><div style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase' }}>My Daily Best</div><div style={{ color: '#f8fafc', fontSize: '20px', fontWeight: 700 }}>{formatSeconds(selectedArchiveStat.myDailyBest)}</div></div>
-                  <div><div style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase' }}>Best</div><div style={{ color: '#f8fafc', fontSize: '20px', fontWeight: 700 }}>{formatSeconds(selectedArchiveMeta.bestAllTime)}</div></div>
                   <div><div style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase' }}>My Best</div><div style={{ color: '#f8fafc', fontSize: '20px', fontWeight: 700 }}>{formatSeconds(selectedArchiveStat.myBest)}</div></div>
+                    <div><div style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase' }}>Solve Rate</div><div style={{ color: '#f8fafc', fontSize: '20px', fontWeight: 700 }}>{selectedArchiveSolveRate == null ? '--' : `${selectedArchiveSolveRate}%`}</div></div>
                   <div><div style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase' }}>Total Tries</div><div style={{ color: '#f8fafc', fontSize: '20px', fontWeight: 700 }}>{selectedArchiveStat.tries}</div></div>
                   <div><div style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase' }}>Total Solves</div><div style={{ color: '#f8fafc', fontSize: '20px', fontWeight: 700 }}>{selectedArchiveStat.solves}</div></div>
                 </div>
@@ -2449,7 +2553,19 @@ function PuzzlesTab({ onBack }) {
                     {tacticalSets[selectedTacticalBand].map((setName) => (
                       <div key={setName} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', padding: '10px 12px', borderRadius: '10px', border: '1px solid #243244', backgroundColor: '#0f172a' }}>
                         <div style={{ color: '#e5e7eb', fontSize: '13px' }}>{setName}</div>
-                        <button onClick={() => setLastSolveMessage(`Started ${setName}`)} style={{ ...styles.startTrainButton, backgroundColor: '#374151', color: '#f3f4f6', border: '1px solid #6b7280', fontSize: '12px' }}>Start</button>
+                        <button onClick={() => {
+                          updatePuzzleRecords((prev) => ({
+                            ...prev,
+                            puzzles: {
+                              ...prev.puzzles,
+                              totals: {
+                                ...prev.puzzles.totals,
+                                tacticalStarts: (prev.puzzles.totals.tacticalStarts || 0) + 1,
+                              },
+                            },
+                          }));
+                          setLastSolveMessage(`Started ${setName}`);
+                        }} style={{ ...styles.startTrainButton, backgroundColor: '#374151', color: '#f3f4f6', border: '1px solid #6b7280', fontSize: '12px' }}>Start</button>
                       </div>
                     ))}
                   </div>
@@ -2469,8 +2585,20 @@ function PuzzlesTab({ onBack }) {
 
 // --- 4C. Guess and Explain ---
 function GuessAndExplainTab({ onBack }) {
+  const [assistModes, setAssistModes] = useState({
+    legalMoves: false,
+    cctPlusReminder: false,
+    checkWarnings: false,
+    blunderWarnings: false,
+    threatWarnings: false,
+  });
+
+  const toggleAssist = (key) => {
+    setAssistModes((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
   return (
-    <div style={{width: '100%'}}>
+    <div style={{ width: '100%', height: '100vh', maxHeight: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <div style={styles.header}>
         <button onClick={onBack} style={styles.backButton}>
           <ArrowLeft size={20} /> Back
@@ -2478,10 +2606,10 @@ function GuessAndExplainTab({ onBack }) {
         <h2 style={styles.dashHeaderTitle}>Guess and Explain</h2>
       </div>
 
-      <div style={{ maxWidth: '800px', margin: '40px auto', padding: '0 24px', display: 'flex', flexDirection: 'column', gap: '32px' }}>
+      <div style={{ flex: 1, maxWidth: '980px', width: '100%', margin: '0 auto', padding: '14px 24px 20px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '14px', overflow: 'hidden' }}>
         <div style={{ textAlign: 'center' }}>
-          <Lightbulb size={48} color="#fcd34d" style={{ marginBottom: '16px' }} />
-          <h2 style={{ fontSize: '32px', margin: '0 0 16px 0' }}>Learn While Playing</h2>
+          <Lightbulb size={40} color="#fcd34d" style={{ marginBottom: '10px' }} />
+          <h2 style={{ fontSize: '28px', margin: '0 0 10px 0' }}>Learn While Playing</h2>
           <p style={{ color: '#cbd5e1', fontSize: '18px', lineHeight: '1.6' }}>
             The system pauses famous or instructional games and asks you: <br/>
             <strong>"You are the player. What would you play?"</strong>
@@ -2489,23 +2617,39 @@ function GuessAndExplainTab({ onBack }) {
         </div>
 
         <div style={styles.controlBox}>
-          <h3 style={styles.controlBoxTitle}>Select Assistance Level</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-            {[
-              { level: 'Level 1 — Beginner', desc: 'Legal move guidance, piece movement reminders, check warnings, basic explanations.' },
-              { level: 'Level 2 — Learning', desc: 'CCT+ prompts, threat identification, strategic and tactical hints.' },
-              { level: 'Level 3 — Independent', desc: 'No direct answers, questions only. Asks you to explain your reasoning.' },
-              { level: 'Level 4 — Challenge', desc: 'No assistance. Full independent evaluation against historical engine lines.' }
-            ].map((lvl, idx) => (
-              <div key={idx} style={{ padding: '20px', backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '12px', cursor: 'pointer', transition: 'border-color 0.2s' }}>
-                <h4 style={{ margin: '0 0 8px 0', color: '#60a5fa' }}>{lvl.level}</h4>
-                <p style={{ margin: 0, color: '#94a3b8', fontSize: '14px', lineHeight: '1.5' }}>{lvl.desc}</p>
-              </div>
-            ))}
+          <h3 style={styles.controlBoxTitle}>Optional Assistance Modes</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '10px' }}>
+              {[
+                ['legalMoves', 'Legal Move Guidance'],
+                ['cctPlusReminder', 'CCT+ Reminder'],
+              ].map(([key, label]) => (
+                <label key={key} style={{ ...styles.checkboxLabel, minHeight: '52px', padding: '12px 14px', display: 'flex', alignItems: 'center', gap: '10px', fontSize: '15px', color: '#f8fafc' }}>
+                  <input type="checkbox" checked={assistModes[key]} onChange={() => toggleAssist(key)} /> {label}
+                </label>
+              ))}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '10px' }}>
+              {[
+                ['checkWarnings', 'Check Warnings'],
+                ['blunderWarnings', 'Blunder Warnings'],
+                ['threatWarnings', 'Threat Warnings'],
+              ].map(([key, label]) => (
+                <label key={key} style={{ ...styles.checkboxLabel, minHeight: '52px', padding: '12px 14px', display: 'flex', alignItems: 'center', gap: '10px', fontSize: '15px', color: '#f8fafc' }}>
+                  <input type="checkbox" checked={assistModes[key]} onChange={() => toggleAssist(key)} /> {label}
+                </label>
+              ))}
+            </div>
           </div>
         </div>
 
-        <button style={{...styles.primaryButton, width: '100%'}}>Launch Interactive Session</button>
+        <div style={styles.controlBox}>
+          <div style={{ color: '#cbd5e1', fontSize: '14px', lineHeight: '1.55' }}>
+            The session will pause at key moments, compare your move with the game continuation, and explain the idea behind each turning point.
+          </div>
+        </div>
+
+        <button style={{ ...styles.primaryButton, width: '100%' }}>Launch Interactive Session</button>
       </div>
     </div>
   );
@@ -2523,7 +2667,7 @@ function LibraryTab({ onBack }) {
   ];
 
   return (
-    <div style={{width: '100%'}}>
+    <div style={{ width: '100%', height: '100vh', maxHeight: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <div style={styles.header}>
         <button onClick={onBack} style={styles.backButton}>
           <ArrowLeft size={20} /> Back
@@ -2531,28 +2675,28 @@ function LibraryTab({ onBack }) {
         <h2 style={styles.dashHeaderTitle}>Chess Library</h2>
       </div>
 
-      <div style={{ maxWidth: '1100px', margin: '40px auto', padding: '0 24px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '32px' }}>
+      <div style={{ flex: 1, maxWidth: '1140px', width: '100%', margin: '0 auto', padding: '14px 24px 20px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '14px', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px' }}>
           <div>
-            <h2 style={{ fontSize: '32px', margin: '0 0 8px 0' }}>Explore the Game</h2>
-            <p style={{ color: '#94a3b8', margin: 0, fontSize: '16px' }}>Discover history, variants, and legendary grandmasters.</p>
+            <h2 style={{ fontSize: '28px', margin: '0 0 8px 0' }}>Explore the Game</h2>
+            <p style={{ color: '#94a3b8', margin: 0, fontSize: '15px' }}>Discover history, variants, and legendary grandmasters.</p>
           </div>
-          <div style={{ padding: '12px 24px', backgroundColor: '#1e293b', borderRadius: '30px', display: 'flex', alignItems: 'center', gap: '8px', color: '#cbd5e1', border: '1px solid #334155' }}>
+          <div style={{ padding: '10px 18px', backgroundColor: '#1e293b', borderRadius: '30px', display: 'flex', alignItems: 'center', gap: '8px', color: '#cbd5e1', border: '1px solid #334155', whiteSpace: 'nowrap' }}>
             <Search size={18} /> Search library...
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '24px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '14px', flex: 1 }}>
           {categories.map((cat, idx) => (
-            <div key={idx} style={{ padding: '24px', backgroundColor: 'rgba(30, 41, 59, 0.9)', backdropFilter: 'blur(8px)', borderRadius: '16px', border: '1px solid #334155', display: 'flex', flexDirection: 'column', gap: '16px', cursor: 'pointer', transition: 'transform 0.2s' }}>
-              <div style={{ padding: '16px', backgroundColor: '#1e293b', width: 'fit-content', borderRadius: '12px' }}>
-                <cat.icon size={32} color="#60a5fa" />
+            <div key={idx} style={{ padding: '18px', backgroundColor: 'rgba(30, 41, 59, 0.9)', backdropFilter: 'blur(8px)', borderRadius: '16px', border: '1px solid #334155', display: 'flex', flexDirection: 'column', gap: '12px', cursor: 'pointer', minHeight: 0 }}>
+              <div style={{ padding: '14px', backgroundColor: '#1e293b', width: 'fit-content', borderRadius: '12px' }}>
+                <cat.icon size={28} color="#60a5fa" />
               </div>
               <div>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '20px' }}>{cat.title}</h3>
-                <p style={{ margin: 0, color: '#94a3b8', lineHeight: '1.5' }}>{cat.desc}</p>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '19px' }}>{cat.title}</h3>
+                <p style={{ margin: 0, color: '#94a3b8', lineHeight: '1.45', fontSize: '14px' }}>{cat.desc}</p>
               </div>
-              <div style={{ marginTop: 'auto', paddingTop: '16px', borderTop: '1px solid #334155', color: '#60a5fa', fontWeight: 'bold', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <div style={{ marginTop: 'auto', paddingTop: '12px', borderTop: '1px solid #334155', color: '#60a5fa', fontWeight: 'bold', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '4px' }}>
                 Explore Collection <ChevronRight size={16} />
               </div>
             </div>
@@ -2564,14 +2708,26 @@ function LibraryTab({ onBack }) {
 }
 
 // --- 4E. My Board (Settings) ---
-function SettingsTab({ onBack }) {
+function SettingsTab({ onBack, boardTheme, setBoardTheme }) {
+  const [customTheme, setCustomTheme] = useState({
+    dark: boardTheme?.dark || DEFAULT_BOARD_THEME.dark,
+    light: boardTheme?.light || DEFAULT_BOARD_THEME.light,
+  });
+
+  useEffect(() => {
+    setCustomTheme({
+      dark: boardTheme?.dark || DEFAULT_BOARD_THEME.dark,
+      light: boardTheme?.light || DEFAULT_BOARD_THEME.light,
+    });
+  }, [boardTheme]);
+
   return (
     <div style={{width: '100%'}}>
       <div style={styles.header}>
         <button onClick={onBack} style={styles.backButton}>
           <ArrowLeft size={20} /> Back
         </button>
-        <h2 style={styles.dashHeaderTitle}>My Board Personalization</h2>
+        <h2 style={styles.dashHeaderTitle}>My Board</h2>
       </div>
 
       <div style={{ maxWidth: '800px', margin: '40px auto', padding: '0 24px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -2579,24 +2735,31 @@ function SettingsTab({ onBack }) {
         <div style={styles.controlBox}>
           <h3 style={styles.controlBoxTitle}>Board Theme</h3>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
-            {[
-              { name: 'Classic Wood', bg: '#b58863', fg: '#f0d9b5' },
-              { name: 'Light (Gray/White)', bg: '#8796a5', fg: '#eceed1' },
-              { name: 'Dark (Black/Gray)', bg: '#475569', fg: '#cbd5e1' },
-              { name: 'Ocean (Blue)', bg: '#4f728c', fg: '#98b6c4' },
-              { name: 'Mountain (Green)', bg: '#779556', fg: '#ebecd0' },
-              { name: 'Bubblegum Pink', bg: '#f472b6', fg: '#fce7f3' }
-            ].map((theme, idx) => (
-              <div key={idx} style={{ padding: '16px', backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', cursor: 'pointer' }}>
+            {BOARD_THEME_PRESETS.map((theme, idx) => (
+              <button key={idx} onClick={() => setBoardTheme({ ...theme })} style={{ padding: '16px', backgroundColor: '#1e293b', border: boardTheme?.name === theme.name ? '1px solid #60a5fa' : '1px solid #334155', borderRadius: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', cursor: 'pointer' }}>
                 <div style={{ width: '64px', height: '64px', display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr', borderRadius: '4px', overflow: 'hidden' }}>
-                  <div style={{backgroundColor: theme.fg}}></div>
-                  <div style={{backgroundColor: theme.bg}}></div>
-                  <div style={{backgroundColor: theme.bg}}></div>
-                  <div style={{backgroundColor: theme.fg}}></div>
+                  <div style={{backgroundColor: theme.light}}></div>
+                  <div style={{backgroundColor: theme.dark}}></div>
+                  <div style={{backgroundColor: theme.dark}}></div>
+                  <div style={{backgroundColor: theme.light}}></div>
                 </div>
                 <div style={{ fontWeight: '500' }}>{theme.name}</div>
-              </div>
+              </button>
             ))}
+          </div>
+
+          <div style={{ marginTop: '18px', padding: '16px', backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: '12px', display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '14px', alignItems: 'end' }}>
+            <div>
+              <div style={{ color: '#cbd5e1', fontWeight: 600, marginBottom: '8px' }}>Customize Light Squares</div>
+              <input type="color" value={customTheme.light} onChange={(e) => setCustomTheme((prev) => ({ ...prev, light: e.target.value }))} style={{ width: '100%', height: '44px', background: 'transparent', border: 'none', cursor: 'pointer' }} />
+            </div>
+            <div>
+              <div style={{ color: '#cbd5e1', fontWeight: 600, marginBottom: '8px' }}>Customize Dark Squares</div>
+              <input type="color" value={customTheme.dark} onChange={(e) => setCustomTheme((prev) => ({ ...prev, dark: e.target.value }))} style={{ width: '100%', height: '44px', background: 'transparent', border: 'none', cursor: 'pointer' }} />
+            </div>
+            <button onClick={() => setBoardTheme({ name: 'Custom', dark: customTheme.dark, light: customTheme.light })} style={{ ...styles.primaryButton, width: 'auto', padding: '12px 16px' }}>
+              Apply Custom Theme
+            </button>
           </div>
         </div>
 
@@ -2627,7 +2790,27 @@ function SettingsTab({ onBack }) {
 }
 
 // --- 4F. The Brain (Profile) ---
-function BrainTab({ onBack }) {
+function BrainTab({ onBack, playerRecords }) {
+  const games = playerRecords?.games || [];
+  const puzzleTotals = playerRecords?.puzzles?.totals || {};
+  const wins = games.filter((game) => game.outcome === 'win').length;
+  const losses = games.filter((game) => game.outcome === 'loss').length;
+  const draws = games.filter((game) => game.outcome === 'draw').length;
+  const averageAccuracy = average(games.map((game) => game.accuracy));
+  const averageMoveCount = average(games.map((game) => game.moveCount));
+  const averagePuzzleSolveRate = average([
+    puzzleTotals.dailyAttempts > 0 ? (puzzleTotals.dailySolves / puzzleTotals.dailyAttempts) * 100 : null,
+    puzzleTotals.archiveAttempts > 0 ? (puzzleTotals.archiveSolves / puzzleTotals.archiveAttempts) * 100 : null,
+    puzzleTotals.mateAttempts > 0 ? (puzzleTotals.mateSolves / puzzleTotals.mateAttempts) * 100 : null,
+  ]);
+  const variantCounts = games.reduce((acc, game) => {
+    const key = formatVariantLabel(game.variant);
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const favoriteVariant = Object.entries(variantCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || 'No games yet';
+  const recentGames = games.slice(-3).reverse();
+
   return (
     <div style={{width: '100%'}}>
       <div style={styles.header}>
@@ -2642,56 +2825,63 @@ function BrainTab({ onBack }) {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
           <div style={{ padding: '24px', backgroundColor: 'rgba(30, 41, 59, 0.9)', borderRadius: '12px', border: '1px solid #334155', textAlign: 'center' }}>
             <div style={{ color: '#94a3b8', marginBottom: '8px' }}>Total Games Played</div>
-            <div style={{ fontSize: '36px', fontWeight: 'bold', color: '#f8fafc' }}>428</div>
+            <div style={{ fontSize: '36px', fontWeight: 'bold', color: '#f8fafc' }}>{games.length}</div>
           </div>
           <div style={{ padding: '24px', backgroundColor: 'rgba(16, 185, 129, 0.1)', borderRadius: '12px', border: '1px solid rgba(16, 185, 129, 0.2)', textAlign: 'center' }}>
             <div style={{ color: '#4ade80', marginBottom: '8px' }}>Wins</div>
-            <div style={{ fontSize: '36px', fontWeight: 'bold', color: '#4ade80' }}>214</div>
+            <div style={{ fontSize: '36px', fontWeight: 'bold', color: '#4ade80' }}>{wins}</div>
           </div>
           <div style={{ padding: '24px', backgroundColor: 'rgba(239, 68, 68, 0.1)', borderRadius: '12px', border: '1px solid rgba(239, 68, 68, 0.2)', textAlign: 'center' }}>
             <div style={{ color: '#f87171', marginBottom: '8px' }}>Losses</div>
-            <div style={{ fontSize: '36px', fontWeight: 'bold', color: '#f87171' }}>180</div>
+            <div style={{ fontSize: '36px', fontWeight: 'bold', color: '#f87171' }}>{losses}</div>
           </div>
           <div style={{ padding: '24px', backgroundColor: 'rgba(245, 158, 11, 0.1)', borderRadius: '12px', border: '1px solid rgba(245, 158, 11, 0.2)', textAlign: 'center' }}>
             <div style={{ color: '#fbbf24', marginBottom: '8px' }}>Draws</div>
-            <div style={{ fontSize: '36px', fontWeight: 'bold', color: '#fbbf24' }}>34</div>
+            <div style={{ fontSize: '36px', fontWeight: 'bold', color: '#fbbf24' }}>{draws}</div>
           </div>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
           <div style={styles.controlBox}>
-            <h3 style={{...styles.controlBoxTitle, display: 'flex', alignItems: 'center', gap: '8px'}}><Activity size={18}/> Skill Profile Accuracy</h3>
+            <h3 style={{...styles.controlBoxTitle, display: 'flex', alignItems: 'center', gap: '8px'}}><Activity size={18}/> Live Performance Records</h3>
             <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '16px' }}>
               {[
-                { label: 'Tactical Accuracy', val: '78%' },
-                { label: 'Defensive Accuracy', val: '65%' },
-                { label: 'Strategic Accuracy', val: '72%' },
-                { label: 'Opening Knowledge', val: '85%' },
-                { label: 'Endgame Execution', val: '58%' }
+                { label: 'Average Match Accuracy', val: formatPercent(averageAccuracy) },
+                { label: 'Average Game Length', val: averageMoveCount == null ? '--' : `${averageMoveCount} plies` },
+                { label: 'Favorite Variant', val: favoriteVariant },
+                { label: 'Daily Puzzle Attempts', val: String(puzzleTotals.dailyAttempts || 0) },
+                { label: 'Puzzle Solve Rate', val: formatPercent(averagePuzzleSolveRate) }
               ].map((skill, idx) => (
                 <li key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '8px', borderBottom: '1px solid #1e293b' }}>
                   <span style={{ color: '#cbd5e1' }}>{skill.label}</span>
-                  <span style={{ fontWeight: 'bold', color: parseInt(skill.val) > 75 ? '#4ade80' : parseInt(skill.val) > 60 ? '#fbbf24' : '#f87171' }}>{skill.val}</span>
+                  <span style={{ fontWeight: 'bold', color: '#e2e8f0', textAlign: 'right' }}>{skill.val}</span>
                 </li>
               ))}
             </ul>
           </div>
 
           <div style={styles.controlBox}>
-            <h3 style={{...styles.controlBoxTitle, display: 'flex', alignItems: 'center', gap: '8px'}}><Brain size={18}/> Identified Mistake Patterns</h3>
+            <h3 style={{...styles.controlBoxTitle, display: 'flex', alignItems: 'center', gap: '8px'}}><Brain size={18}/> Tracked Activity</h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <div style={{ padding: '12px', backgroundColor: 'rgba(239, 68, 68, 0.1)', borderLeft: '4px solid #ef4444', borderRadius: '4px' }}>
-                <div style={{ fontWeight: 'bold', color: '#f87171', marginBottom: '4px' }}>Tactical Oversight</div>
-                <div style={{ fontSize: '14px', color: '#94a3b8' }}>You frequently miss Knight forks in complex middlegames (Accuracy: 62%).</div>
+              <div style={{ padding: '12px', backgroundColor: 'rgba(59, 130, 246, 0.1)', borderLeft: '4px solid #3b82f6', borderRadius: '4px' }}>
+                <div style={{ fontWeight: 'bold', color: '#60a5fa', marginBottom: '4px' }}>Archive Puzzle Starts</div>
+                <div style={{ fontSize: '14px', color: '#94a3b8' }}>{puzzleTotals.archiveAttempts || 0} attempts logged with {puzzleTotals.archiveSolves || 0} successful solves.</div>
               </div>
-              <div style={{ padding: '12px', backgroundColor: 'rgba(239, 68, 68, 0.1)', borderLeft: '4px solid #ef4444', borderRadius: '4px' }}>
-                <div style={{ fontWeight: 'bold', color: '#f87171', marginBottom: '4px' }}>Threat Awareness</div>
-                <div style={{ fontSize: '14px', color: '#94a3b8' }}>You often identify tactical opportunities but fail to calculate the opponent's counter-response.</div>
+              <div style={{ padding: '12px', backgroundColor: 'rgba(16, 185, 129, 0.1)', borderLeft: '4px solid #10b981', borderRadius: '4px' }}>
+                <div style={{ fontWeight: 'bold', color: '#4ade80', marginBottom: '4px' }}>Mate Training</div>
+                <div style={{ fontSize: '14px', color: '#94a3b8' }}>{puzzleTotals.mateAttempts || 0} mate puzzles launched with {puzzleTotals.mateSolves || 0} completed.</div>
               </div>
-              <div style={{ padding: '12px', backgroundColor: 'rgba(59, 130, 246, 0.1)', borderLeft: '4px solid #3b82f6', borderRadius: '4px', marginTop: '8px' }}>
-                <div style={{ fontWeight: 'bold', color: '#60a5fa', marginBottom: '4px' }}>System Recommendation</div>
-                <div style={{ fontSize: '14px', color: '#94a3b8' }}>Generated 5 custom Knight-fork puzzles and 3 intermediate calculation exercises.</div>
-                <button style={{ marginTop: '8px', padding: '6px 12px', backgroundColor: '#2563eb', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>Start Training Path</button>
+              <div style={{ padding: '12px', backgroundColor: 'rgba(245, 158, 11, 0.1)', borderLeft: '4px solid #f59e0b', borderRadius: '4px', marginTop: '8px' }}>
+                <div style={{ fontWeight: 'bold', color: '#fbbf24', marginBottom: '8px' }}>Recent Game Log</div>
+                {recentGames.length === 0 ? (
+                  <div style={{ fontSize: '14px', color: '#94a3b8' }}>Finish freestyle games to populate match history here.</div>
+                ) : (
+                  recentGames.map((recentGame) => (
+                    <div key={recentGame.id} style={{ fontSize: '14px', color: '#cbd5e1', marginBottom: '6px' }}>
+                      {formatVariantLabel(recentGame.variant)}: {recentGame.outcome.toUpperCase()} | {recentGame.moveCount} plies | {formatPercent(recentGame.accuracy)}
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           </div>
@@ -2708,6 +2898,26 @@ function BrainTab({ onBack }) {
 // ==========================================
 export default function ChessSim() {
   const [currentView, setCurrentView] = useState('start');
+  const [boardTheme, setBoardTheme] = useState(() => loadStoredValue(STORAGE_KEYS.boardTheme, () => ({ ...DEFAULT_BOARD_THEME })));
+  const [playerRecords, setPlayerRecords] = useState(() => loadStoredValue(STORAGE_KEYS.playerRecords, buildDefaultPlayerRecords));
+
+  useEffect(() => {
+    saveStoredValue(STORAGE_KEYS.boardTheme, boardTheme);
+  }, [boardTheme]);
+
+  useEffect(() => {
+    saveStoredValue(STORAGE_KEYS.playerRecords, playerRecords);
+  }, [playerRecords]);
+
+  const handleRecordGame = (record) => {
+    setPlayerRecords((prev) => {
+      const safePrev = prev || buildDefaultPlayerRecords();
+      return {
+        ...safePrev,
+        games: [...safePrev.games, record].slice(-100),
+      };
+    });
+  };
 
   const renderView = () => {
     switch (currentView) {
@@ -2774,17 +2984,17 @@ export default function ChessSim() {
     </div> 
   );
       case 'play': 
-        return <FreestyleChessTab onBack={() => setCurrentView('dashboard')} />;
+        return <FreestyleChessTab onBack={() => setCurrentView('dashboard')} boardTheme={boardTheme} onRecordGame={handleRecordGame} />;
       case 'puzzles': 
-        return <PuzzlesTab onBack={() => setCurrentView('dashboard')} />;
+        return <PuzzlesTab onBack={() => setCurrentView('dashboard')} playerRecords={playerRecords} setPlayerRecords={setPlayerRecords} />;
       case 'analysis': 
         return <GuessAndExplainTab onBack={() => setCurrentView('dashboard')} />;
       case 'history': 
         return <LibraryTab onBack={() => setCurrentView('dashboard')} />;
       case 'settings': 
-        return <SettingsTab onBack={() => setCurrentView('dashboard')} />;
+        return <SettingsTab onBack={() => setCurrentView('dashboard')} boardTheme={boardTheme} setBoardTheme={setBoardTheme} />;
       case 'profile': 
-        return <BrainTab onBack={() => setCurrentView('dashboard')} />;
+        return <BrainTab onBack={() => setCurrentView('dashboard')} playerRecords={playerRecords} />;
       default: 
         return null;
     }
