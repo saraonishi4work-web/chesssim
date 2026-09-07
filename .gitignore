@@ -7,3 +7,6 @@ dist/
 # Keep large Stockfish binaries local
 /tools/bin/stockfish
 /tools/bin/nn-1a298aa575a0.nnue
+
+# Local nested repo, not part of deploy
+/prompts.chat/
