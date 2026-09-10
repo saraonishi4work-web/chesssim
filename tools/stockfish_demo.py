@@ -19,6 +19,8 @@ import argparse
 import json
 import math
 import csv
+import shutil
+import subprocess
 from pathlib import Path
 from typing import List, Dict, Any
 
@@ -151,22 +153,48 @@ def analyse_position_multipv(engine: chess.engine.SimpleEngine, board: chess.Boa
     return lines
 
 
+def is_usable_stockfish_path(path_str: str) -> bool:
+    if not path_str:
+        return False
+    try:
+        result = subprocess.run(
+            [path_str, 'uci'],
+            input='uci\nisready\nquit\n',
+            text=True,
+            capture_output=True,
+            timeout=15,
+        )
+    except (FileNotFoundError, OSError, subprocess.SubprocessError, TimeoutError):
+        return False
+
+    output = (result.stdout or '') + '\n' + (result.stderr or '')
+    return result.returncode == 0 or 'Stockfish' in output or 'uciok' in output.lower()
+
+
 def resolve_default_stockfish_path(explicit_path: str = None) -> str:
     if explicit_path:
         return explicit_path
 
     here = Path(__file__).resolve().parent
+    repo_root = here.parent
     candidates = [
-        here / "bin" / "stockfish",
-        Path("tools/bin/stockfish"),
-        Path("/opt/homebrew/bin/stockfish"),
-        Path("/usr/local/bin/stockfish"),
+        repo_root / '.stockfish' / 'stockfish' / 'stockfish-macos-universal',
+        repo_root / '.stockfish' / 'stockfish' / 'stockfish',
+        here / 'bin' / 'stockfish',
+        Path('tools/bin/stockfish'),
+        Path('/opt/homebrew/bin/stockfish'),
+        Path('/usr/local/bin/stockfish'),
     ]
     for candidate in candidates:
-        if candidate.exists():
-            return str(candidate)
+        candidate_str = str(candidate)
+        if candidate.exists() and is_usable_stockfish_path(candidate_str):
+            return candidate_str
 
-    return "stockfish"
+    which_stockfish = shutil.which('stockfish')
+    if which_stockfish and is_usable_stockfish_path(which_stockfish):
+        return which_stockfish
+
+    return 'stockfish'
 
 
 def resolve_evalfile_for_binary(stockfish_path: str) -> str:

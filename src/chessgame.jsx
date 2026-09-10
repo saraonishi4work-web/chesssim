@@ -991,6 +991,7 @@ function ActiveBoardSection({
   gameStatus,
   setGameStatus,
   gameMode,
+  friendPasskey,
   stockfishLevel,
   boardOrientation,
   setBoardOrientation,
@@ -1138,7 +1139,17 @@ function ActiveBoardSection({
   };
 
   const applyThreeCheckWinCondition = (nextGame, moverColor) => {
-    if (!isThreeCheck || !nextGame.isCheck()) return false;
+    if (!isThreeCheck) return false;
+
+    if (nextGame.isCheckmate()) {
+      const winner = moverColor === 'w' ? 'White' : 'Black';
+      setCustomGameOver(true);
+      setGameStatus(`Checkmate! ${winner} Wins!`);
+      return true;
+    }
+
+    if (!nextGame.isCheck()) return false;
+
     const nextCounts = { ...threeCheckCounts, [moverColor]: (threeCheckCounts[moverColor] || 0) + 1 };
     setThreeCheckCounts(nextCounts);
     if (nextCounts[moverColor] >= 3) {
@@ -1825,7 +1836,11 @@ function ActiveBoardSection({
         <div style={styles.boardCard}>
           <div style={styles.statusBar}>
             <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-              <Target size={18} /> {gameStatus}
+              <Target size={18} />
+              <span>{gameStatus}</span>
+              {gameMode === 'friend' && friendPasskey && (
+                <span style={{ marginLeft: '8px', color: '#93c5fd', fontWeight: 700 }}>Passkey: {friendPasskey}</span>
+              )}
             </span>
           </div>
           <div style={styles.boardInner}>
@@ -2046,6 +2061,20 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
   };
 
   const [view, setView] = useState('setup'); // 'setup' | 'active'
+  const [friendSetup, setFriendSetup] = useState(() => {
+    if (typeof window === 'undefined') return { inviteCode: '', joinCode: '', joinError: '' };
+    try {
+      const stored = window.localStorage.getItem('chesssim_friend_passkey');
+      const joinStored = window.localStorage.getItem('chesssim_friend_join');
+      return {
+        inviteCode: stored || '',
+        joinCode: joinStored || '',
+        joinError: '',
+      };
+    } catch (e) {
+      return { inviteCode: '', joinCode: '', joinError: '' };
+    }
+  });
   const [setupConfig, setSetupConfig] = useState(() => {
     const base = {
       timeControl: '10 minutes',
@@ -2083,6 +2112,42 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
     }
   }, [setupConfig]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem('chesssim_friend_passkey', JSON.stringify(friendSetup.inviteCode));
+      window.localStorage.setItem('chesssim_friend_join', JSON.stringify(friendSetup.joinCode));
+    } catch (e) {
+      // Ignore storage failures.
+    }
+  }, [friendSetup.inviteCode, friendSetup.joinCode]);
+
+  const generateFriendPasskey = () => {
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const code = `FRIEND-${Array.from({ length: 6 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join('')}`;
+    setFriendSetup((prev) => ({ ...prev, inviteCode: code, joinCode: prev.joinCode || '', joinError: '' }));
+    return code;
+  };
+
+  const joinFriendMatch = () => {
+    const trimmed = (friendSetup.joinCode || '').trim().toUpperCase();
+    const inviteCode = (friendSetup.inviteCode || '').trim().toUpperCase();
+
+    if (!trimmed) {
+      setFriendSetup((prev) => ({ ...prev, joinError: 'Enter the friend passkey to join.' }));
+      return false;
+    }
+
+    const matched = trimmed === inviteCode || trimmed === 'FRIEND';
+    if (!matched) {
+      setFriendSetup((prev) => ({ ...prev, joinError: 'That passkey does not match the current invite.' }));
+      return false;
+    }
+
+    setFriendSetup((prev) => ({ ...prev, joinCode: trimmed, joinError: '' }));
+    return true;
+  };
+
   const toggleAssist = (key) => {
     setSetupConfig(prev => ({
       ...prev, 
@@ -2091,8 +2156,20 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
   };
 
   const isStandardVariant = setupConfig.variant === 'Standard';
+  const activeGameMode = setupConfig.opponent === 'Play vs AI' ? 'ai' : setupConfig.opponent === 'Pass & Play' ? 'pass-play' : 'friend';
+  const activeFriendPasskey = setupConfig.opponent === 'Play with Friends'
+    ? (friendSetup.inviteCode || friendSetup.joinCode || 'FRIEND-UNSET')
+    : '';
 
   if (view === 'active') {
+    const nextOrientation = setupConfig.opponent === 'Play with Friends' && friendSetup.joinCode
+      ? 'black'
+      : 'white';
+
+    if (boardOrientation !== nextOrientation) {
+      setBoardOrientation(nextOrientation);
+    }
+
     return (
       <ActiveBoardSection
         setCurrentView={setView}
@@ -2100,7 +2177,8 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
         setGame={setGame}
         gameStatus={gameStatus}
         setGameStatus={setGameStatus}
-        gameMode={setupConfig.opponent === 'Play vs AI' ? 'ai' : 'pass-play'}
+        gameMode={activeGameMode}
+        friendPasskey={activeFriendPasskey}
         stockfishLevel={4}
         boardOrientation={boardOrientation}
         setBoardOrientation={setBoardOrientation}
@@ -2217,7 +2295,7 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
           </h2>
 
           <div style={{ display: 'flex', gap: '10px' }}>
-            {['Play vs AI', 'Pass & Play', 'Play Online'].map(mode => (
+            {['Play vs AI', 'Pass & Play', 'Play with Friends'].map(mode => (
               <button
                 key={mode}
                 onClick={() => setSetupConfig({ ...setupConfig, opponent: mode })}
@@ -2240,6 +2318,48 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
               </button>
             ))}
           </div>
+
+          {setupConfig.opponent === 'Play with Friends' && (
+            <div style={{ marginTop: '12px', display: 'grid', gap: '10px' }}>
+              <div style={{ backgroundColor: '#0b1220', border: '1px solid #23303f', borderRadius: '8px', padding: '10px' }}>
+                <div style={{ color: '#93c5fd', fontWeight: '700', marginBottom: '8px' }}>Invite a friend</div>
+                <button
+                  onClick={() => generateFriendPasskey()}
+                  style={{ ...styles.actionButton, padding: '8px 12px', width: '100%', marginBottom: '8px' }}
+                >
+                  Create passkey
+                </button>
+                {friendSetup.inviteCode && (
+                  <div style={{ color: '#f8fafc', backgroundColor: '#111827', border: '1px solid #334155', borderRadius: '6px', padding: '8px 10px', fontWeight: '700', letterSpacing: '0.08em' }}>
+                    {friendSetup.inviteCode}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ backgroundColor: '#0b1220', border: '1px solid #23303f', borderRadius: '8px', padding: '10px' }}>
+                <div style={{ color: '#93c5fd', fontWeight: '700', marginBottom: '8px' }}>Join a friend</div>
+                <input
+                  value={friendSetup.joinCode}
+                  onChange={(e) => setFriendSetup((prev) => ({ ...prev, joinCode: e.target.value.toUpperCase(), joinError: '' }))}
+                  placeholder="Enter passkey"
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '8px 10px', borderRadius: '6px', border: '1px solid #334155', backgroundColor: '#1e293b', color: '#f8fafc', marginBottom: '8px' }}
+                />
+                <button
+                  onClick={() => {
+                    if (joinFriendMatch()) {
+                      setSetupConfig((prev) => ({ ...prev, opponent: 'Play with Friends' }));
+                    }
+                  }}
+                  style={{ ...styles.actionButton, padding: '8px 12px', width: '100%' }}
+                >
+                  Join match
+                </button>
+                {friendSetup.joinError && (
+                  <div style={{ marginTop: '8px', color: '#fca5a5', fontSize: '12px' }}>{friendSetup.joinError}</div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Assistance Modes */}
@@ -2280,6 +2400,17 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
                 setGameStatus("White's Turn | Checks W:0 B:0");
               } else {
                 setGameStatus("White's Turn");
+              }
+              if (setupConfig.opponent === 'Play with Friends') {
+                const friendCode = friendSetup.inviteCode || friendSetup.joinCode || generateFriendPasskey();
+                const friendSeat = friendSetup.joinCode ? 'black' : 'white';
+                setFriendSetup((prev) => ({
+                  ...prev,
+                  inviteCode: friendCode,
+                  joinCode: prev.joinCode || friendCode,
+                  joinError: '',
+                }));
+                setBoardOrientation(friendSeat);
               }
               setView('active');
             }} 

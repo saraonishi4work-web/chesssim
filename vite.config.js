@@ -6,18 +6,53 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
+function isUsableStockfishBinary(binaryPath) {
+  if (!binaryPath || typeof binaryPath !== 'string') return false;
+  try {
+    const proc = spawnSync(binaryPath, {
+      input: 'uci\nisready\nquit\n',
+      encoding: 'utf8',
+      timeout: 15000,
+    });
+    const output = `${proc.stdout || ''}\n${proc.stderr || ''}`;
+    return proc.status === 0 || /Stockfish|uciok/i.test(output);
+  } catch (error) {
+    return false;
+  }
+}
+
 function resolveStockfishBinary(root) {
   const candidates = [
+    path.join(root, '.stockfish', 'stockfish', 'stockfish-macos-universal'),
+    path.join(root, '.stockfish', 'stockfish', 'stockfish'),
     path.join(root, 'tools', 'bin', 'stockfish'),
+    'stockfish',
     '/opt/homebrew/bin/stockfish',
     '/usr/local/bin/stockfish',
   ];
-  return candidates.find((p) => fs.existsSync(p)) || 'stockfish';
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+
+    if (candidate === 'stockfish') {
+      const which = spawnSync('which', ['stockfish'], { encoding: 'utf8', timeout: 5000 });
+      const resolved = (which.stdout || '').trim();
+      if (resolved && isUsableStockfishBinary(resolved)) return resolved;
+      continue;
+    }
+
+    if (fs.existsSync(candidate) && isUsableStockfishBinary(candidate)) {
+      return candidate;
+    }
+  }
+
+  return candidates.find((candidate) => !!candidate) || 'stockfish';
 }
 
 function resolveEvalFile(root, stockfishPath) {
   const candidates = [
     path.join(path.dirname(stockfishPath), 'nn-1a298aa575a0.nnue'),
+    path.join(root, '.stockfish', 'stockfish', 'nn-1a298aa575a0.nnue'),
     path.join(root, 'tools', 'bin', 'nn-1a298aa575a0.nnue'),
   ];
   return candidates.find((p) => fs.existsSync(p)) || '';
