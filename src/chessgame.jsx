@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import Peer from 'peerjs';
 import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import {
@@ -992,6 +993,9 @@ function ActiveBoardSection({
   setGameStatus,
   gameMode,
   friendPasskey,
+  friendConnectionText,
+  friendRole,
+  onFriendStateSync,
   stockfishLevel,
   boardOrientation,
   setBoardOrientation,
@@ -1703,6 +1707,9 @@ function ActiveBoardSection({
       setUndoSnapshots((prev) => [...prev, captureSnapshot()]);
       setRedoSnapshots([]);
       setGame(gameCopy);
+      if (gameMode === 'friend' && onFriendStateSync) {
+        onFriendStateSync(gameCopy, [...(Array.isArray(moveHistory) ? moveHistory : []), move.san || `${sourceSquare}-${targetSquare}`]);
+      }
       setHighlightedSquares({});
       setLastMoveSquares({ from: sourceSquare, to: targetSquare });
       if (isCrazyhouse) {
@@ -1757,6 +1764,9 @@ function ActiveBoardSection({
     setUndoSnapshots((prev) => [...prev, captureSnapshot()]);
     setRedoSnapshots([]);
     setGame(dropped);
+    if (gameMode === 'friend' && onFriendStateSync) {
+      onFriendStateSync(dropped, [...(Array.isArray(moveHistory) ? moveHistory : []), `${selectedDropPiece.toUpperCase()}@${square}`]);
+    }
     setCrazyhousePocket((prev) => ({
       ...prev,
       [turn]: {
@@ -1839,7 +1849,11 @@ function ActiveBoardSection({
               <Target size={18} />
               <span>{gameStatus}</span>
               {gameMode === 'friend' && friendPasskey && (
-                <span style={{ marginLeft: '8px', color: '#93c5fd', fontWeight: 700 }}>Passkey: {friendPasskey}</span>
+                <>
+                  <span style={{ marginLeft: '8px', color: '#93c5fd', fontWeight: 700 }}>Passkey: {friendPasskey}</span>
+                  <span style={{ marginLeft: '8px', color: '#a7f3d0', fontWeight: 700 }}>[{friendConnectionText}]</span>
+                  <span style={{ marginLeft: '8px', color: '#fcd34d', fontWeight: 700 }}>{friendRole === 'white' ? 'You are White' : 'You are Black'}</span>
+                </>
               )}
             </span>
           </div>
@@ -2061,6 +2075,10 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
   };
 
   const [view, setView] = useState('setup'); // 'setup' | 'active'
+  const peerRef = useRef(null);
+  const friendConnRef = useRef(null);
+  const [friendConnectionStatus, setFriendConnectionStatus] = useState('idle');
+  const [friendRole, setFriendRole] = useState('white');
   const [friendSetup, setFriendSetup] = useState(() => {
     if (typeof window === 'undefined') return { inviteCode: '', joinCode: '', joinError: '' };
     try {
@@ -2122,10 +2140,53 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
     }
   }, [friendSetup.inviteCode, friendSetup.joinCode]);
 
+  const closeFriendConnection = () => {
+    if (friendConnRef.current) {
+      friendConnRef.current.close();
+      friendConnRef.current = null;
+    }
+    if (peerRef.current) {
+      peerRef.current.destroy();
+      peerRef.current = null;
+    }
+    setFriendConnectionStatus('idle');
+  };
+
+  useEffect(() => () => closeFriendConnection(), []);
+
+  const handleIncomingFriendState = (payload) => {
+    if (!payload || !payload.fen) return;
+    try {
+      const nextGame = new Chess(payload.fen);
+      setGame(nextGame);
+      setMoveHistory(Array.isArray(payload.moveHistory) ? payload.moveHistory : []);
+      setGameStatus(payload.gameStatus || "White's Turn");
+    } catch (e) {
+      console.error('Failed to apply remote friend state', e);
+    }
+  };
+
+  const syncFriendState = (nextGame, nextHistory = moveHistory, nextStatus = gameStatus) => {
+    if (setupConfig.opponent !== 'Play with Friends' || !friendConnRef.current || !friendConnRef.current.open) return;
+    try {
+      friendConnRef.current.send({
+        type: 'game-state',
+        payload: {
+          fen: nextGame?.fen?.() || new Chess().fen(),
+          moveHistory: Array.isArray(nextHistory) ? nextHistory : [],
+          gameStatus: nextStatus,
+        },
+      });
+    } catch (e) {
+      console.error('Failed to sync friend state', e);
+    }
+  };
+
   const generateFriendPasskey = () => {
     const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     const code = `FRIEND-${Array.from({ length: 6 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join('')}`;
     setFriendSetup((prev) => ({ ...prev, inviteCode: code, joinCode: prev.joinCode || '', joinError: '' }));
+    setFriendRole('white');
     return code;
   };
 
@@ -2145,7 +2206,77 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
     }
 
     setFriendSetup((prev) => ({ ...prev, joinCode: trimmed, joinError: '' }));
+    setFriendRole('black');
     return true;
+  };
+
+  const startFriendPeer = (peerId, asHost = false) => {
+    closeFriendConnection();
+    const peer = new Peer(peerId, {
+      host: '0.peerjs.com',
+      port: 443,
+      secure: true,
+      path: '/',
+      debug: 0,
+    });
+    peerRef.current = peer;
+
+    peer.on('open', () => {
+      setFriendConnectionStatus(asHost ? 'hosting' : 'connecting');
+      if (asHost) {
+        console.log('Friend host peer open:', peerId);
+      }
+    });
+
+    peer.on('connection', (conn) => {
+      friendConnRef.current = conn;
+      setFriendConnectionStatus('connected');
+      conn.on('data', (data) => {
+        if (data?.type === 'game-state') {
+          handleIncomingFriendState(data.payload);
+        }
+      });
+      conn.on('open', () => {
+        conn.send({
+          type: 'game-state',
+          payload: {
+            fen: game?.fen?.() || new Chess().fen(),
+            moveHistory: Array.isArray(moveHistory) ? moveHistory : [],
+            gameStatus,
+          },
+        });
+      });
+    });
+
+    peer.on('error', (err) => {
+      console.error('PeerJS error', err);
+      setFriendConnectionStatus('error');
+    });
+
+    if (!asHost) {
+      const conn = peer.connect(peerId, { reliable: true });
+      friendConnRef.current = conn;
+      setFriendConnectionStatus('connecting');
+      conn.on('open', () => {
+        setFriendConnectionStatus('connected');
+        conn.send({
+          type: 'game-state',
+          payload: {
+            fen: game?.fen?.() || new Chess().fen(),
+            moveHistory: Array.isArray(moveHistory) ? moveHistory : [],
+            gameStatus,
+          },
+        });
+      });
+      conn.on('data', (data) => {
+        if (data?.type === 'game-state') {
+          handleIncomingFriendState(data.payload);
+        }
+      });
+      conn.on('close', () => {
+        setFriendConnectionStatus('idle');
+      });
+    }
   };
 
   const toggleAssist = (key) => {
@@ -2160,6 +2291,8 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
   const activeFriendPasskey = setupConfig.opponent === 'Play with Friends'
     ? (friendSetup.inviteCode || friendSetup.joinCode || 'FRIEND-UNSET')
     : '';
+
+  const friendConnectionText = friendConnectionStatus === 'hosting' ? 'Hosting match' : friendConnectionStatus === 'connected' ? 'Connected' : friendConnectionStatus === 'connecting' ? 'Connecting…' : friendConnectionStatus === 'waiting' ? 'Waiting for friend…' : 'Not connected';
 
   if (view === 'active') {
     const nextOrientation = setupConfig.opponent === 'Play with Friends' && friendSetup.joinCode
@@ -2179,6 +2312,9 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
         setGameStatus={setGameStatus}
         gameMode={activeGameMode}
         friendPasskey={activeFriendPasskey}
+        friendConnectionText={friendConnectionText}
+        friendRole={friendRole}
+        onFriendStateSync={syncFriendState}
         stockfishLevel={4}
         boardOrientation={boardOrientation}
         setBoardOrientation={setBoardOrientation}
@@ -2348,6 +2484,8 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
                   onClick={() => {
                     if (joinFriendMatch()) {
                       setSetupConfig((prev) => ({ ...prev, opponent: 'Play with Friends' }));
+                      setFriendRole('black');
+                      startFriendPeer(friendSetup.joinCode.trim().toUpperCase(), false);
                     }
                   }}
                   style={{ ...styles.actionButton, padding: '8px 12px', width: '100%' }}
@@ -2410,7 +2548,13 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
                   joinCode: prev.joinCode || friendCode,
                   joinError: '',
                 }));
+                setFriendRole(friendSeat);
                 setBoardOrientation(friendSeat);
+                if (friendSetup.joinCode) {
+                  startFriendPeer(friendCode, false);
+                } else {
+                  startFriendPeer(friendCode, true);
+                }
               }
               setView('active');
             }} 
