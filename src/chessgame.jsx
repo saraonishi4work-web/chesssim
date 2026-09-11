@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Peer from 'peerjs';
-import { initializeApp } from 'firebase/app';
-import { getDatabase, ref, get, set, onValue, off } from 'firebase/database';
+import { ref, get, set, onValue, off } from 'firebase/database';
 import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
+import { db } from './firebase';
 import {
   Play, RotateCcw, RefreshCw, Flag,
   ArrowLeft, ChevronRight, MonitorPlay,
@@ -79,26 +79,7 @@ const BOARD_THEME_PRESETS = [
 
 const DEFAULT_BOARD_THEME = { ...BOARD_THEME_PRESETS[2] };
 
-const FIREBASE_CONFIG = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || '',
-  databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL || '',
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || '',
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || '',
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '',
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || '',
-};
-
-const firebaseEnabled = Object.values(FIREBASE_CONFIG).some((value) => typeof value === 'string' && value.trim() !== '');
-const firebaseApp = firebaseEnabled ? (() => {
-  try {
-    return initializeApp(FIREBASE_CONFIG);
-  } catch (error) {
-    console.warn('Firebase init failed; falling back to PeerJS friend mode.', error);
-    return null;
-  }
-})() : null;
-const firebaseDb = firebaseApp ? getDatabase(firebaseApp) : null;
+const firebaseDb = db || null;
 
 function buildEmptyPocket() {
   return {
