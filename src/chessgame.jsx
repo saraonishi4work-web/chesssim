@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Peer from 'peerjs';
+import { initializeApp } from 'firebase/app';
+import { getDatabase, ref, get, set, onValue, off } from 'firebase/database';
 import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import {
@@ -76,6 +78,27 @@ const BOARD_THEME_PRESETS = [
 ];
 
 const DEFAULT_BOARD_THEME = { ...BOARD_THEME_PRESETS[2] };
+
+const FIREBASE_CONFIG = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || '',
+  databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL || '',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || '',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || '',
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || '',
+};
+
+const firebaseEnabled = Object.values(FIREBASE_CONFIG).some((value) => typeof value === 'string' && value.trim() !== '');
+const firebaseApp = firebaseEnabled ? (() => {
+  try {
+    return initializeApp(FIREBASE_CONFIG);
+  } catch (error) {
+    console.warn('Firebase init failed; falling back to PeerJS friend mode.', error);
+    return null;
+  }
+})() : null;
+const firebaseDb = firebaseApp ? getDatabase(firebaseApp) : null;
 
 function buildEmptyPocket() {
   return {
@@ -2077,6 +2100,7 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
   const [view, setView] = useState('setup'); // 'setup' | 'active'
   const peerRef = useRef(null);
   const friendConnRef = useRef(null);
+  const firebaseRoomRef = useRef(null);
   const [friendConnectionStatus, setFriendConnectionStatus] = useState('idle');
   const [friendRole, setFriendRole] = useState('white');
   const [friendSetup, setFriendSetup] = useState(() => {
@@ -2149,10 +2173,65 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
       peerRef.current.destroy();
       peerRef.current = null;
     }
+    if (firebaseRoomRef.current) {
+      try {
+        off(firebaseRoomRef.current);
+      } catch (e) {
+        // Ignore cleanup failures.
+      }
+      firebaseRoomRef.current = null;
+    }
     setFriendConnectionStatus('idle');
   };
 
   useEffect(() => () => closeFriendConnection(), []);
+
+  const startFirebaseFriendRoom = async (roomId, asHost) => {
+    if (!firebaseDb || !roomId) {
+      setFriendConnectionStatus('error');
+      return false;
+    }
+
+    const normalizedId = String(roomId).trim().toUpperCase();
+    const roomRef = ref(firebaseDb, `friend_games/${normalizedId}`);
+
+    try {
+      const snapshot = await get(roomRef);
+      const existing = snapshot.exists() ? snapshot.val() : {};
+      const nextData = {
+        roomId: normalizedId,
+        status: 'active',
+        createdAt: existing.createdAt || Date.now(),
+        updatedAt: Date.now(),
+        hostRole: 'white',
+        guestRole: 'black',
+        hostReady: asHost ? true : Boolean(existing.hostReady),
+        guestReady: asHost ? Boolean(existing.guestReady) : true,
+        state: {
+          fen: existing?.state?.fen || new Chess().fen(),
+          moveHistory: Array.isArray(existing?.state?.moveHistory) ? existing.state.moveHistory : [],
+          gameStatus: existing?.state?.gameStatus || "White's Turn",
+        },
+      };
+
+      await set(roomRef, nextData);
+      firebaseRoomRef.current = roomRef;
+      setFriendConnectionStatus(asHost ? 'hosting' : 'connected');
+
+      onValue(roomRef, (snapshotValue) => {
+        const data = snapshotValue.val();
+        if (!data || !data.state) return;
+        setFriendConnectionStatus(data.hostReady && data.guestReady ? 'connected' : asHost ? 'hosting' : 'connecting');
+        handleIncomingFriendState(data.state);
+      });
+
+      return true;
+    } catch (error) {
+      console.error('Firebase friend room start failed', error);
+      setFriendConnectionStatus('error');
+      return false;
+    }
+  };
 
   const handleIncomingFriendState = (payload) => {
     if (!payload || !payload.fen) return;
@@ -2167,15 +2246,35 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
   };
 
   const syncFriendState = (nextGame, nextHistory = moveHistory, nextStatus = gameStatus) => {
+    const roomId = (friendSetup.inviteCode || friendSetup.joinCode || '').trim().toUpperCase();
+    const payload = {
+      fen: nextGame?.fen?.() || new Chess().fen(),
+      moveHistory: Array.isArray(nextHistory) ? nextHistory : [],
+      gameStatus: nextStatus,
+    };
+
+    if (setupConfig.opponent === 'Play with Friends' && firebaseDb && roomId) {
+      const roomRef = ref(firebaseDb, `friend_games/${roomId}`);
+      set(roomRef, {
+        roomId,
+        status: 'active',
+        updatedAt: Date.now(),
+        hostRole: 'white',
+        guestRole: 'black',
+        hostReady: true,
+        guestReady: true,
+        state: payload,
+      }).catch((error) => {
+        console.error('Failed to sync friend state to Firebase', error);
+      });
+      return;
+    }
+
     if (setupConfig.opponent !== 'Play with Friends' || !friendConnRef.current || !friendConnRef.current.open) return;
     try {
       friendConnRef.current.send({
         type: 'game-state',
-        payload: {
-          fen: nextGame?.fen?.() || new Chess().fen(),
-          moveHistory: Array.isArray(nextHistory) ? nextHistory : [],
-          gameStatus: nextStatus,
-        },
+        payload,
       });
     } catch (e) {
       console.error('Failed to sync friend state', e);
@@ -2485,7 +2584,11 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
                     if (joinFriendMatch()) {
                       setSetupConfig((prev) => ({ ...prev, opponent: 'Play with Friends' }));
                       setFriendRole('black');
-                      startFriendPeer(friendSetup.joinCode.trim().toUpperCase(), false);
+                      if (firebaseDb) {
+                        startFirebaseFriendRoom(friendSetup.joinCode.trim().toUpperCase(), false);
+                      } else {
+                        startFriendPeer(friendSetup.joinCode.trim().toUpperCase(), false);
+                      }
                     }
                   }}
                   style={{ ...styles.actionButton, padding: '8px 12px', width: '100%' }}
@@ -2551,9 +2654,17 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
                 setFriendRole(friendSeat);
                 setBoardOrientation(friendSeat);
                 if (friendSetup.joinCode) {
-                  startFriendPeer(friendCode, false);
+                  if (firebaseDb) {
+                    startFirebaseFriendRoom(friendCode, false);
+                  } else {
+                    startFriendPeer(friendCode, false);
+                  }
                 } else {
-                  startFriendPeer(friendCode, true);
+                  if (firebaseDb) {
+                    startFirebaseFriendRoom(friendCode, true);
+                  } else {
+                    startFriendPeer(friendCode, true);
+                  }
                 }
               }
               setView('active');
