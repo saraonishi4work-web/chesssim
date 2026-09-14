@@ -66,7 +66,46 @@ const STORAGE_KEYS = {
   boardTheme: 'chesssim_board_theme',
   playerRecords: 'chesssim_player_records',
   experienceSettings: 'chesssim_experience_settings',
+  userAccounts: 'chesssim_user_accounts',
+  activeUser: 'chesssim_active_user',
 };
+
+function generateRandomUserId() {
+  return String(Math.floor(10000000 + Math.random() * 90000000));
+}
+
+function validatePassword(password) {
+  if (!password || typeof password !== 'string') return false;
+  return /^(?=.*[A-Za-z])(?=.*\d).{4,}$/.test(password.trim());
+}
+
+function readStoredUserAccounts() {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEYS.userAccounts);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function writeStoredUserAccounts(accounts) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(STORAGE_KEYS.userAccounts, JSON.stringify(accounts));
+  } catch (e) {
+    // Ignore storage failures.
+  }
+}
+
+function buildFriendRoomId(playerA, playerB) {
+  const a = String(playerA || '').trim();
+  const b = String(playerB || '').trim();
+  if (!a || !b) return '';
+  return `friend-${[a, b].sort().join('-')}`;
+}
 
 const BOARD_THEME_PRESETS = [
   { name: 'Classic Wood', dark: '#b58863', light: '#f0d9b5' },
@@ -395,6 +434,17 @@ const styles = {
     boxShadow: '0 8px 20px rgba(0, 0, 0, 0.5)',
     transition: 'transform 0.15s ease',
     marginBottom: '0vh',
+  },
+  inputStyle: {
+    width: '100%',
+    boxSizing: 'border-box',
+    padding: '10px 12px',
+    borderRadius: '10px',
+    border: '1px solid #334155',
+    backgroundColor: '#0f172a',
+    color: '#f8fafc',
+    fontSize: '14px',
+    outline: 'none',
   },
 
   // 2. HOME DASHBOARD (Uses /chess-bdbg.png)
@@ -2068,7 +2118,7 @@ function ActiveBoardSection({
 
 // --- 4A. Freestyle Chess (Setup & Active Gameplay) ---
 
-function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGame }) {
+function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGame, currentUser }) {
   const defaultAssistModes = {
     legalMoves: false,
     checkWarnings: false,
@@ -2084,6 +2134,7 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
   const firebaseRoomRef = useRef(null);
   const [friendConnectionStatus, setFriendConnectionStatus] = useState('idle');
   const [friendRole, setFriendRole] = useState('white');
+  const [friendColorChoice, setFriendColorChoice] = useState('white');
   const [friendSetup, setFriendSetup] = useState(() => {
     if (typeof window === 'undefined') return { inviteCode: '', joinCode: '', joinError: '' };
     try {
@@ -2167,7 +2218,7 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
 
   useEffect(() => () => closeFriendConnection(), []);
 
-  const startFirebaseFriendRoom = async (roomId, asHost) => {
+  const startFirebaseFriendRoom = async (roomId, asHost, selectedColor = friendColorChoice) => {
     if (!firebaseDb || !roomId) {
       setFriendConnectionStatus('error');
       return false;
@@ -2179,13 +2230,30 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
     try {
       const snapshot = await get(roomRef);
       const existing = snapshot.exists() ? snapshot.val() : {};
+      const resolvedHostColor = asHost ? selectedColor : (existing.hostColor || 'white');
+      const resolvedGuestColor = asHost ? (selectedColor === 'white' ? 'black' : 'white') : (existing.guestColor || 'black');
+
+      if (!asHost && existing.hostColor && selectedColor === existing.hostColor) {
+        setFriendSetup((prev) => ({ ...prev, joinError: 'That color is already taken by the other player.' }));
+        setFriendConnectionStatus('idle');
+        return false;
+      }
+
+      if (asHost && existing.guestColor && selectedColor === existing.guestColor) {
+        setFriendSetup((prev) => ({ ...prev, joinError: 'That color is already taken by the other player.' }));
+        setFriendConnectionStatus('idle');
+        return false;
+      }
+
       const nextData = {
         roomId: normalizedId,
         status: 'active',
         createdAt: existing.createdAt || Date.now(),
         updatedAt: Date.now(),
-        hostRole: 'white',
-        guestRole: 'black',
+        hostRole: resolvedHostColor,
+        guestRole: resolvedGuestColor,
+        hostColor: resolvedHostColor,
+        guestColor: resolvedGuestColor,
         hostReady: asHost ? true : Boolean(existing.hostReady),
         guestReady: asHost ? Boolean(existing.guestReady) : true,
         state: {
@@ -2203,6 +2271,7 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
         const data = snapshotValue.val();
         if (!data || !data.state) return;
         setFriendConnectionStatus(data.hostReady && data.guestReady ? 'connected' : asHost ? 'hosting' : 'connecting');
+        if (data.hostColor) setFriendRole(data.hostColor === 'white' ? 'white' : 'black');
         handleIncomingFriendState(data.state);
       });
 
@@ -2227,7 +2296,8 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
   };
 
   const syncFriendState = (nextGame, nextHistory = moveHistory, nextStatus = gameStatus) => {
-    const roomId = (friendSetup.inviteCode || friendSetup.joinCode || '').trim().toUpperCase();
+    const invitedUserId = (friendSetup.inviteCode || friendSetup.joinCode || '').trim();
+    const roomId = currentUser?.userId && invitedUserId ? buildFriendRoomId(currentUser.userId, invitedUserId) : (friendSetup.inviteCode || friendSetup.joinCode || '').trim().toUpperCase();
     const payload = {
       fen: nextGame?.fen?.() || new Chess().fen(),
       moveHistory: Array.isArray(nextHistory) ? nextHistory : [],
@@ -2359,6 +2429,13 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
     }
   };
 
+  useEffect(() => {
+    if (!currentUser && setupConfig.opponent === 'Play with Friends') {
+      setSetupConfig((prev) => ({ ...prev, opponent: 'Play vs AI' }));
+      setFriendSetup((prev) => ({ ...prev, joinError: 'Sign in to unlock Play with Friends.' }));
+    }
+  }, [currentUser, setupConfig.opponent]);
+
   const toggleAssist = (key) => {
     setSetupConfig(prev => ({
       ...prev, 
@@ -2366,6 +2443,7 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
     }));
   };
 
+  const availableModes = currentUser ? ['Play vs AI', 'Pass & Play', 'Play with Friends'] : ['Play vs AI', 'Pass & Play'];
   const isStandardVariant = setupConfig.variant === 'Standard';
   const activeGameMode = setupConfig.opponent === 'Play vs AI' ? 'ai' : setupConfig.opponent === 'Pass & Play' ? 'pass-play' : 'friend';
   const activeFriendPasskey = setupConfig.opponent === 'Play with Friends'
@@ -2511,7 +2589,7 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
           </h2>
 
           <div style={{ display: 'flex', gap: '10px' }}>
-            {['Play vs AI', 'Pass & Play', 'Play with Friends'].map(mode => (
+            {availableModes.map(mode => (
               <button
                 key={mode}
                 onClick={() => setSetupConfig({ ...setupConfig, opponent: mode })}
@@ -2535,47 +2613,75 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
             ))}
           </div>
 
-          {setupConfig.opponent === 'Play with Friends' && (
-            <div style={{ marginTop: '12px', display: 'grid', gap: '10px' }}>
-              <div style={{ backgroundColor: '#0b1220', border: '1px solid #23303f', borderRadius: '8px', padding: '10px' }}>
-                <div style={{ color: '#93c5fd', fontWeight: '700', marginBottom: '8px' }}>Invite a friend</div>
-                <button
-                  onClick={() => generateFriendPasskey()}
-                  style={{ ...styles.actionButton, padding: '8px 12px', width: '100%', marginBottom: '8px' }}
-                >
-                  Create passkey
-                </button>
-                {friendSetup.inviteCode && (
-                  <div style={{ color: '#f8fafc', backgroundColor: '#111827', border: '1px solid #334155', borderRadius: '6px', padding: '8px 10px', fontWeight: '700', letterSpacing: '0.08em' }}>
-                    {friendSetup.inviteCode}
-                  </div>
-                )}
-              </div>
+          {!currentUser && (
+            <div style={{ marginTop: '12px', color: '#fcd34d', fontSize: '12px', backgroundColor: '#181e2f', border: '1px solid #374151', borderRadius: '8px', padding: '8px 10px' }}>
+              Sign in to unlock Play with Friends.
+            </div>
+          )}
 
-              <div style={{ backgroundColor: '#0b1220', border: '1px solid #23303f', borderRadius: '8px', padding: '10px' }}>
-                <div style={{ color: '#93c5fd', fontWeight: '700', marginBottom: '8px' }}>Join a friend</div>
+          {currentUser && setupConfig.opponent === 'Play with Friends' && (
+            <div style={{ marginTop: '8px', display: 'grid', gap: '10px' }}>
+              <div style={{ backgroundColor: '#0b1220', border: '1px solid #23303f', borderRadius: '12px', padding: '8px 10px', boxShadow: 'inset 0 0 0 1px rgba(148,163,184,0.08)' }}>
+                <div style={{ color: '#dbeafe', fontSize: '11px', marginBottom: '6px' }}>
+                  Your User ID: <strong>{currentUser?.userId || 'Not signed in'}</strong>
+                </div>
                 <input
-                  value={friendSetup.joinCode}
-                  onChange={(e) => setFriendSetup((prev) => ({ ...prev, joinCode: e.target.value.toUpperCase(), joinError: '' }))}
-                  placeholder="Enter passkey"
-                  style={{ width: '100%', boxSizing: 'border-box', padding: '8px 10px', borderRadius: '6px', border: '1px solid #334155', backgroundColor: '#1e293b', color: '#f8fafc', marginBottom: '8px' }}
+                  value={friendSetup.inviteCode}
+                  onChange={(e) => setFriendSetup((prev) => ({ ...prev, inviteCode: e.target.value.trim(), joinError: '' }))}
+                  placeholder="Enter your friend's User ID"
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '12px 14px', borderRadius: '10px', border: '1px solid #334155', backgroundColor: '#1f2937', color: '#f8fafc', fontSize: '17px', marginBottom: '8px' }}
                 />
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+                  {['white', 'black'].map((color) => (
+                    <button
+                      key={color}
+                      type="button"
+                      onClick={() => setFriendColorChoice(color)}
+                      style={{
+                        padding: '11px 10px',
+                        borderRadius: '10px',
+                        border: '1px solid #334155',
+                        backgroundColor: friendColorChoice === color ? '#2563eb' : '#1e293b',
+                        color: '#f8fafc',
+                        cursor: 'pointer',
+                        fontWeight: '700',
+                        fontSize: '15px',
+                        textTransform: 'capitalize',
+                      }}
+                    >
+                      {color === 'white' ? 'White' : 'Black'}
+                    </button>
+                  ))}
+                </div>
+
                 <button
                   onClick={() => {
-                    if (joinFriendMatch()) {
-                      setSetupConfig((prev) => ({ ...prev, opponent: 'Play with Friends' }));
-                      setFriendRole('black');
-                      if (firebaseDb) {
-                        startFirebaseFriendRoom(friendSetup.joinCode.trim().toUpperCase(), false);
-                      } else {
-                        startFriendPeer(friendSetup.joinCode.trim().toUpperCase(), false);
-                      }
+                    const opponentId = (friendSetup.inviteCode || '').trim();
+                    if (!currentUser?.userId) {
+                      setFriendSetup((prev) => ({ ...prev, joinError: 'Sign in to play with friends.' }));
+                      return;
+                    }
+                    if (!opponentId || opponentId === currentUser.userId) {
+                      setFriendSetup((prev) => ({ ...prev, joinError: 'Enter a valid friend User ID.' }));
+                      return;
+                    }
+                    const roomId = buildFriendRoomId(currentUser.userId, opponentId);
+                    const selectedColor = friendColorChoice;
+                    setFriendSetup((prev) => ({ ...prev, inviteCode: opponentId, joinError: '' }));
+                    setFriendRole(selectedColor);
+                    setBoardOrientation(selectedColor);
+                    if (firebaseDb) {
+                      startFirebaseFriendRoom(roomId, true, selectedColor);
+                    } else {
+                      startFriendPeer(roomId, true);
                     }
                   }}
-                  style={{ ...styles.actionButton, padding: '8px 12px', width: '100%' }}
+                  style={{ ...styles.actionButton, padding: '10px 14px', width: '100%', fontSize: '16px', fontWeight: '800' }}
                 >
-                  Join match
+                  Start match as {friendColorChoice === 'white' ? 'White' : 'Black'}
                 </button>
+
                 {friendSetup.joinError && (
                   <div style={{ marginTop: '8px', color: '#fca5a5', fontSize: '12px' }}>{friendSetup.joinError}</div>
                 )}
@@ -2624,28 +2730,28 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
                 setGameStatus("White's Turn");
               }
               if (setupConfig.opponent === 'Play with Friends') {
-                const friendCode = friendSetup.inviteCode || friendSetup.joinCode || generateFriendPasskey();
-                const friendSeat = friendSetup.joinCode ? 'black' : 'white';
+                const friendId = (friendSetup.inviteCode || '').trim();
+                if (!currentUser?.userId) {
+                  setFriendSetup((prev) => ({ ...prev, joinError: 'Please sign in before starting a friend match.' }));
+                  return;
+                }
+                if (!friendId || friendId === currentUser.userId) {
+                  setFriendSetup((prev) => ({ ...prev, joinError: 'Enter a valid friend User ID before starting the match.' }));
+                  return;
+                }
+                const roomId = buildFriendRoomId(currentUser.userId, friendId);
                 setFriendSetup((prev) => ({
                   ...prev,
-                  inviteCode: friendCode,
-                  joinCode: prev.joinCode || friendCode,
+                  inviteCode: friendId,
+                  joinCode: '',
                   joinError: '',
                 }));
-                setFriendRole(friendSeat);
-                setBoardOrientation(friendSeat);
-                if (friendSetup.joinCode) {
-                  if (firebaseDb) {
-                    startFirebaseFriendRoom(friendCode, false);
-                  } else {
-                    startFriendPeer(friendCode, false);
-                  }
+                setFriendRole(friendColorChoice);
+                setBoardOrientation(friendColorChoice);
+                if (firebaseDb) {
+                  startFirebaseFriendRoom(roomId, true, friendColorChoice);
                 } else {
-                  if (firebaseDb) {
-                    startFirebaseFriendRoom(friendCode, true);
-                  } else {
-                    startFriendPeer(friendCode, true);
-                  }
+                  startFriendPeer(roomId, true);
                 }
               }
               setView('active');
@@ -3441,10 +3547,44 @@ export default function ChessSim() {
   const [boardTheme, setBoardTheme] = useState(() => loadStoredValue(STORAGE_KEYS.boardTheme, () => ({ ...DEFAULT_BOARD_THEME })));
   const [playerRecords, setPlayerRecords] = useState(() => resetDailyPuzzleData(loadStoredValue(STORAGE_KEYS.playerRecords, buildDefaultPlayerRecords)));
   const [experienceSettings, setExperienceSettings] = useState(() => loadStoredValue(STORAGE_KEYS.experienceSettings, buildDefaultExperienceSettings));
+  const [currentUser, setCurrentUser] = useState(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEYS.activeUser);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  });
+  const [authPanelOpen, setAuthPanelOpen] = useState(false);
+  const [authMode, setAuthMode] = useState('signup');
+  const [authInfoOpen, setAuthInfoOpen] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [generatedUserId, setGeneratedUserId] = useState(() => generateRandomUserId());
+  const [authForm, setAuthForm] = useState({ displayName: '', userId: '', password: '', confirmPassword: '' });
 
   useEffect(() => {
     setPlayerRecords((prev) => resetDailyPuzzleData(prev));
   }, []);
+
+  useEffect(() => {
+    if (authPanelOpen && authMode === 'signup') {
+      setGeneratedUserId(generateRandomUserId());
+    }
+  }, [authPanelOpen, authMode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      if (currentUser) {
+        window.localStorage.setItem(STORAGE_KEYS.activeUser, JSON.stringify(currentUser));
+      } else {
+        window.localStorage.removeItem(STORAGE_KEYS.activeUser);
+      }
+    } catch (e) {
+      // Ignore storage failures.
+    }
+  }, [currentUser]);
 
   useEffect(() => {
     saveStoredValue(STORAGE_KEYS.boardTheme, boardTheme);
@@ -3468,16 +3608,120 @@ export default function ChessSim() {
     });
   };
 
+  const handleAccountSignup = () => {
+    const displayName = (authForm.displayName || '').trim();
+    const password = (authForm.password || '').trim();
+    const confirmPassword = (authForm.confirmPassword || '').trim();
+
+    if (!displayName) {
+      setAuthError('Choose a display name.');
+      return;
+    }
+    if (!validatePassword(password)) {
+      setAuthError('Password must include letters and numbers and be at least 4 characters long.');
+      return;
+    }
+    if (password !== confirmPassword) {
+      setAuthError('Passwords do not match.');
+      return;
+    }
+
+    const accounts = readStoredUserAccounts();
+    let userId = generatedUserId;
+    while (accounts.some((account) => account.userId === userId)) {
+      userId = generateRandomUserId();
+      setGeneratedUserId(userId);
+    }
+
+    const newAccount = { userId, displayName, password, createdAt: Date.now() };
+    writeStoredUserAccounts([...accounts, newAccount]);
+    setCurrentUser(newAccount);
+    setAuthForm({ displayName: '', userId: '', password: '', confirmPassword: '' });
+    setGeneratedUserId(generateRandomUserId());
+    setAuthError('');
+    setAuthPanelOpen(false);
+  };
+
+  const handleAccountSignin = () => {
+    const userId = (authForm.userId || '').trim();
+    const password = (authForm.password || '').trim();
+    const accounts = readStoredUserAccounts();
+    const match = accounts.find((account) => account.userId === userId && account.password === password);
+
+    if (!match) {
+      setAuthError('Invalid User ID or password.');
+      return;
+    }
+
+    setCurrentUser(match);
+    setAuthForm({ displayName: '', userId: '', password: '', confirmPassword: '' });
+    setAuthError('');
+    setAuthPanelOpen(false);
+  };
+
   const renderView = () => {
     switch (currentView) {
       case 'start':
         return (
           <div style={styles.startContainer}>
+            <div style={{ position: 'absolute', top: 18, right: 20, display: 'flex', alignItems: 'center', gap: 12, zIndex: 10 }}>
+              <div style={{ position: 'relative' }}>
+                <button
+                  onClick={() => setAuthInfoOpen((prev) => !prev)}
+                  style={{ width: 30, height: 30, borderRadius: '50%', border: '1px solid #475569', backgroundColor: '#111827', color: '#dbeafe', fontWeight: 800, cursor: 'pointer' }}
+                  aria-label="Account benefits"
+                >
+                  i
+                </button>
+                {authInfoOpen && (
+                  <div style={{ position: 'absolute', right: 0, top: 38, width: 250, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 12, padding: '10px 12px', boxShadow: '0 10px 28px rgba(15,23,42,0.45)', fontSize: 12, color: '#dbeafe', lineHeight: 1.5 }}>
+                    Create an account to play with friends and save your progress.
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={() => setAuthPanelOpen((prev) => !prev)}
+                style={{ ...styles.playButton, padding: '10px 18px', fontSize: 14, borderRadius: 12 }}
+              >
+                {currentUser ? `Signed in: ${currentUser.userId}` : 'Sign in / Sign up'}
+              </button>
+            </div>
+
+            {authPanelOpen && (
+              <div style={{ position: 'absolute', top: 76, right: 20, width: 320, backgroundColor: '#111827', border: '1px solid #334155', borderRadius: 16, boxShadow: '0 18px 34px rgba(15,23,42,0.42)', padding: 16, zIndex: 20 }}>
+                <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                  <button onClick={() => setAuthMode('signup')} style={{ flex: 1, padding: '8px 10px', borderRadius: 10, border: authMode === 'signup' ? '1px solid #60a5fa' : '1px solid #334155', backgroundColor: authMode === 'signup' ? '#1d4ed8' : '#1e293b', color: '#f8fafc', fontWeight: 700, cursor: 'pointer' }}>Sign up</button>
+                  <button onClick={() => setAuthMode('signin')} style={{ flex: 1, padding: '8px 10px', borderRadius: 10, border: authMode === 'signin' ? '1px solid #60a5fa' : '1px solid #334155', backgroundColor: authMode === 'signin' ? '#1d4ed8' : '#1e293b', color: '#f8fafc', fontWeight: 700, cursor: 'pointer' }}>Sign in</button>
+                </div>
+
+                {authMode === 'signup' ? (
+                  <div style={{ display: 'grid', gap: 10 }}>
+                    <input value={authForm.displayName} onChange={(e) => setAuthForm((prev) => ({ ...prev, displayName: e.target.value }))} placeholder="Display name" style={styles.inputStyle} />
+                    <div style={{ padding: '8px 10px', borderRadius: 8, backgroundColor: '#0f172a', color: '#bfdbfe', border: '1px solid #334155', fontSize: 12 }}>
+                      Your User ID: <strong>{generatedUserId}</strong>
+                    </div>
+                    <input type="password" value={authForm.password} onChange={(e) => setAuthForm((prev) => ({ ...prev, password: e.target.value }))} placeholder="Password (letters + numbers, min 4 each)" style={styles.inputStyle} />
+                    <input type="password" value={authForm.confirmPassword} onChange={(e) => setAuthForm((prev) => ({ ...prev, confirmPassword: e.target.value }))} placeholder="Confirm password" style={styles.inputStyle} />
+                    {authError && <div style={{ color: '#fca5a5', fontSize: 12 }}>{authError}</div>}
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button onClick={handleAccountSignup} style={{ ...styles.actionButton, flex: 1 }}>Create account</button>
+                      {currentUser && <button onClick={() => { setCurrentUser(null); setAuthError(''); }} style={{ ...styles.actionButton, flex: 1, backgroundColor: '#334155' }}>Sign out</button>}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gap: 10 }}>
+                    <input value={authForm.userId} onChange={(e) => setAuthForm((prev) => ({ ...prev, userId: e.target.value }))} placeholder="User ID" style={styles.inputStyle} />
+                    <input type="password" value={authForm.password} onChange={(e) => setAuthForm((prev) => ({ ...prev, password: e.target.value }))} placeholder="Password" style={styles.inputStyle} />
+                    {authError && <div style={{ color: '#fca5a5', fontSize: 12 }}>{authError}</div>}
+                    <button onClick={handleAccountSignin} style={{ ...styles.actionButton }}>Sign in</button>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div style={styles.topHeaderGroup}>
               <h1 style={styles.title}>ChessSim</h1>
-              <p style={styles.subtitle}>Personal Machine Intelligence for Chess Mastery
-        
-              </p>
+              <p style={styles.subtitle}>Personal Machine Intelligence for Chess Mastery</p>
             </div>
             <button 
               onClick={() => setCurrentView('dashboard')}
@@ -3533,7 +3777,7 @@ export default function ChessSim() {
     </div> 
   );
       case 'play': 
-        return <FreestyleChessTab onBack={() => setCurrentView('dashboard')} boardTheme={boardTheme} experienceSettings={experienceSettings} onRecordGame={handleRecordGame} />;
+        return <FreestyleChessTab onBack={() => setCurrentView('dashboard')} boardTheme={boardTheme} experienceSettings={experienceSettings} onRecordGame={handleRecordGame} currentUser={currentUser} />;
       case 'puzzles': 
         return <PuzzlesTab onBack={() => setCurrentView('dashboard')} playerRecords={playerRecords} setPlayerRecords={setPlayerRecords} />;
       case 'analysis': 
