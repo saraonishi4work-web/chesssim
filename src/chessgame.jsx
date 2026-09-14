@@ -91,6 +91,41 @@ function readStoredUserAccounts() {
   }
 }
 
+async function readRemoteUserAccounts() {
+  if (!db) return [];
+  try {
+    const snapshot = await get(ref(db, 'user_accounts'));
+    if (!snapshot.exists()) return [];
+    const values = snapshot.val();
+    return Object.values(values || {});
+  } catch (e) {
+    return [];
+  }
+}
+
+async function findRemoteUserAccount(userId) {
+  if (!db || !userId) return null;
+  try {
+    const snapshot = await get(ref(db, `user_accounts/${String(userId).trim()}`));
+    return snapshot.exists() ? snapshot.val() : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function writeRemoteUserAccount(account) {
+  if (!db || !account?.userId) return false;
+  try {
+    await set(ref(db, `user_accounts/${String(account.userId).trim()}`), {
+      ...account,
+      updatedAt: Date.now(),
+    });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 function writeStoredUserAccounts(accounts) {
   if (typeof window === 'undefined') return;
   try {
@@ -105,6 +140,20 @@ function buildFriendRoomId(playerA, playerB) {
   const b = String(playerB || '').trim();
   if (!a || !b) return '';
   return `friend-${[a, b].sort().join('-')}`;
+}
+
+function resolveFriendColorForCurrentUser(roomData, currentUserId, fallbackColor = 'white') {
+  if (!roomData) return fallbackColor;
+
+  const hostUserId = roomData.hostUserId || null;
+  const guestUserId = roomData.guestUserId || null;
+  const hostColor = roomData.hostColor || roomData.hostRole || 'white';
+  const guestColor = roomData.guestColor || roomData.guestRole || 'black';
+
+  if (currentUserId && hostUserId && currentUserId === hostUserId) return hostColor;
+  if (currentUserId && guestUserId && currentUserId === guestUserId) return guestColor;
+
+  return fallbackColor;
 }
 
 const BOARD_THEME_PRESETS = [
@@ -2229,17 +2278,26 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
 
     try {
       const snapshot = await get(roomRef);
-      const existing = snapshot.exists() ? snapshot.val() : {};
-      const resolvedHostColor = asHost ? selectedColor : (existing.hostColor || 'white');
-      const resolvedGuestColor = asHost ? (selectedColor === 'white' ? 'black' : 'white') : (existing.guestColor || 'black');
+      const existing = snapshot.exists() ? snapshot.val() : null;
+      const currentUserId = currentUser?.userId || null;
+      const existingHostId = existing?.hostUserId || null;
+      const existingGuestId = existing?.guestUserId || null;
+      const isCurrentUserHost = Boolean(currentUserId && existingHostId && existingHostId === currentUserId);
+      const isCurrentUserGuest = Boolean(currentUserId && existingGuestId && existingGuestId === currentUserId);
+      const effectiveAsHost = Boolean(
+        asHost && (!existing || !existingHostId || isCurrentUserHost || (!existingGuestId && !isCurrentUserGuest))
+      ) || (!existing && asHost);
 
-      if (!asHost && existing.hostColor && selectedColor === existing.hostColor) {
+      const resolvedHostColor = effectiveAsHost ? selectedColor : (existing?.hostColor || 'white');
+      const resolvedGuestColor = effectiveAsHost ? (selectedColor === 'white' ? 'black' : 'white') : (existing?.guestColor || 'black');
+
+      if (existing && !effectiveAsHost && typeof selectedColor === 'string' && selectedColor === existing?.hostColor) {
         setFriendSetup((prev) => ({ ...prev, joinError: 'That color is already taken by the other player.' }));
         setFriendConnectionStatus('idle');
         return false;
       }
 
-      if (asHost && existing.guestColor && selectedColor === existing.guestColor) {
+      if (existing && effectiveAsHost && existing?.guestColor && selectedColor === existing.guestColor) {
         setFriendSetup((prev) => ({ ...prev, joinError: 'That color is already taken by the other player.' }));
         setFriendConnectionStatus('idle');
         return false;
@@ -2248,14 +2306,16 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
       const nextData = {
         roomId: normalizedId,
         status: 'active',
-        createdAt: existing.createdAt || Date.now(),
+        createdAt: existing?.createdAt || Date.now(),
         updatedAt: Date.now(),
+        hostUserId: effectiveAsHost ? (currentUserId || existingHostId || currentUser?.userId || 'host') : (existingHostId || currentUserId || 'host'),
+        guestUserId: effectiveAsHost ? (existingGuestId || null) : (currentUserId || existingGuestId || 'guest'),
         hostRole: resolvedHostColor,
         guestRole: resolvedGuestColor,
         hostColor: resolvedHostColor,
         guestColor: resolvedGuestColor,
-        hostReady: asHost ? true : Boolean(existing.hostReady),
-        guestReady: asHost ? Boolean(existing.guestReady) : true,
+        hostReady: effectiveAsHost ? true : Boolean(existing?.hostReady),
+        guestReady: effectiveAsHost ? Boolean(existing?.guestReady) : true,
         state: {
           fen: existing?.state?.fen || new Chess().fen(),
           moveHistory: Array.isArray(existing?.state?.moveHistory) ? existing.state.moveHistory : [],
@@ -2264,14 +2324,19 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
       };
 
       await set(roomRef, nextData);
+      const myColor = resolveFriendColorForCurrentUser(nextData, currentUserId, selectedColor);
+      setFriendRole(myColor);
+      setBoardOrientation(myColor);
       firebaseRoomRef.current = roomRef;
-      setFriendConnectionStatus(asHost ? 'hosting' : 'connected');
+      setFriendConnectionStatus(effectiveAsHost ? 'hosting' : 'connected');
 
       onValue(roomRef, (snapshotValue) => {
         const data = snapshotValue.val();
         if (!data || !data.state) return;
-        setFriendConnectionStatus(data.hostReady && data.guestReady ? 'connected' : asHost ? 'hosting' : 'connecting');
-        if (data.hostColor) setFriendRole(data.hostColor === 'white' ? 'white' : 'black');
+        const roomMyColor = resolveFriendColorForCurrentUser(data, currentUserId, selectedColor);
+        setFriendConnectionStatus(data.hostReady && data.guestReady ? 'connected' : effectiveAsHost ? 'hosting' : 'connecting');
+        setFriendRole(roomMyColor);
+        setBoardOrientation(roomMyColor);
         handleIncomingFriendState(data.state);
       });
 
@@ -2295,7 +2360,7 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
     }
   };
 
-  const syncFriendState = (nextGame, nextHistory = moveHistory, nextStatus = gameStatus) => {
+  const syncFriendState = async (nextGame, nextHistory = moveHistory, nextStatus = gameStatus) => {
     const invitedUserId = (friendSetup.inviteCode || friendSetup.joinCode || '').trim();
     const roomId = currentUser?.userId && invitedUserId ? buildFriendRoomId(currentUser.userId, invitedUserId) : (friendSetup.inviteCode || friendSetup.joinCode || '').trim().toUpperCase();
     const payload = {
@@ -2306,18 +2371,41 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
 
     if (setupConfig.opponent === 'Play with Friends' && firebaseDb && roomId) {
       const roomRef = ref(firebaseDb, `friend_games/${roomId}`);
-      set(roomRef, {
-        roomId,
-        status: 'active',
-        updatedAt: Date.now(),
-        hostRole: 'white',
-        guestRole: 'black',
-        hostReady: true,
-        guestReady: true,
-        state: payload,
-      }).catch((error) => {
+      try {
+        const snapshot = await get(roomRef);
+        const roomData = snapshot.exists() ? snapshot.val() : {};
+        const nextRoomData = {
+          ...roomData,
+          roomId,
+          status: 'active',
+          updatedAt: Date.now(),
+          hostUserId: roomData?.hostUserId || currentUser?.userId || 'host',
+          guestUserId: roomData?.guestUserId || null,
+          hostRole: roomData?.hostRole || roomData?.hostColor || 'white',
+          guestRole: roomData?.guestRole || roomData?.guestColor || 'black',
+          hostColor: roomData?.hostColor || roomData?.hostRole || 'white',
+          guestColor: roomData?.guestColor || roomData?.guestRole || 'black',
+          hostReady: roomData?.hostReady ?? true,
+          guestReady: roomData?.guestReady ?? true,
+          state: payload,
+        };
+
+        if (currentUser?.userId && roomData?.hostUserId === currentUser.userId) {
+          nextRoomData.hostColor = roomData?.hostColor || friendColorChoice || 'white';
+          nextRoomData.hostRole = nextRoomData.hostColor;
+        }
+        if (currentUser?.userId && roomData?.guestUserId === currentUser.userId) {
+          nextRoomData.guestColor = roomData?.guestColor || (nextRoomData.hostColor === 'white' ? 'black' : 'white');
+          nextRoomData.guestRole = nextRoomData.guestColor;
+        }
+
+        await set(roomRef, nextRoomData);
+        const myColor = resolveFriendColorForCurrentUser(nextRoomData, currentUser?.userId || null, friendColorChoice || 'white');
+        setFriendRole(myColor);
+        setBoardOrientation(myColor);
+      } catch (error) {
         console.error('Failed to sync friend state to Firebase', error);
-      });
+      }
       return;
     }
 
@@ -3608,7 +3696,7 @@ export default function ChessSim() {
     });
   };
 
-  const handleAccountSignup = () => {
+  const handleAccountSignup = async () => {
     const displayName = (authForm.displayName || '').trim();
     const password = (authForm.password || '').trim();
     const confirmPassword = (authForm.confirmPassword || '').trim();
@@ -3626,15 +3714,22 @@ export default function ChessSim() {
       return;
     }
 
-    const accounts = readStoredUserAccounts();
+    const localAccounts = readStoredUserAccounts();
     let userId = generatedUserId;
-    while (accounts.some((account) => account.userId === userId)) {
+    const remoteMatch = await findRemoteUserAccount(userId);
+    while (localAccounts.some((account) => account.userId === userId) || remoteMatch) {
       userId = generateRandomUserId();
       setGeneratedUserId(userId);
     }
 
     const newAccount = { userId, displayName, password, createdAt: Date.now() };
-    writeStoredUserAccounts([...accounts, newAccount]);
+    const remoteSuccess = await writeRemoteUserAccount(newAccount);
+    if (remoteSuccess) {
+      writeStoredUserAccounts([...localAccounts, newAccount]);
+    } else {
+      writeStoredUserAccounts([...localAccounts, newAccount]);
+    }
+
     setCurrentUser(newAccount);
     setAuthForm({ displayName: '', userId: '', password: '', confirmPassword: '' });
     setGeneratedUserId(generateRandomUserId());
@@ -3642,11 +3737,21 @@ export default function ChessSim() {
     setAuthPanelOpen(false);
   };
 
-  const handleAccountSignin = () => {
+  const handleAccountSignin = async () => {
     const userId = (authForm.userId || '').trim();
     const password = (authForm.password || '').trim();
-    const accounts = readStoredUserAccounts();
-    const match = accounts.find((account) => account.userId === userId && account.password === password);
+
+    const remoteAccount = await findRemoteUserAccount(userId);
+    if (remoteAccount && remoteAccount.password === password) {
+      setCurrentUser(remoteAccount);
+      setAuthForm({ displayName: '', userId: '', password: '', confirmPassword: '' });
+      setAuthError('');
+      setAuthPanelOpen(false);
+      return;
+    }
+
+    const localAccounts = readStoredUserAccounts();
+    const match = localAccounts.find((account) => account.userId === userId && account.password === password);
 
     if (!match) {
       setAuthError('Invalid User ID or password.');

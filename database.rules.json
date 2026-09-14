@@ -1,0 +1,14 @@
+{
+  "rules": {
+    ".read": true,
+    ".write": true,
+    "user_accounts": {
+      ".read": true,
+      ".write": true
+    },
+    "friend_games": {
+      ".read": true,
+      ".write": true
+    }
+  }
+}
