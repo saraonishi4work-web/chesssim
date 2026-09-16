@@ -11,7 +11,7 @@ import {
   Users, Bot, Repeat, Undo, Lightbulb,
   Target, Settings, ShieldCheck, Activity, Check,
   Clock, BookOpen, Map, Award, TrendingUp, BarChart2,
-  Crosshair, Zap, Shield, Search
+  Crosshair, Zap, Shield, Search, FastForward, CheckCircle
 } from 'lucide-react';
 
 async function fetchStockfishAnalysis(moves, depth = 10, multipv = 2) {
@@ -2889,29 +2889,24 @@ const activeStyles = {
     boxSizing: 'border-box',
     transition: 'background-color 0.15s ease'
   }
-}; 
-
+};     
 
 // --- 4B. Puzzles & Tactics ---
-function PuzzlesTab({ onBack, playerRecords, setPlayerRecords }) {
+function PuzzlesView({ onBack, playerRecords, setPlayerRecords, styles, buildDefaultPlayerRecords }) {
   const [activeTab, setActiveTab] = useState('daily');
-  const [selectedArchiveId, setSelectedArchiveId] = useState(null);
   const [selectedTacticalBand, setSelectedTacticalBand] = useState(null);
+  const [activePractice, setActivePractice] = useState(null);
 
-  const dailyPuzzle = { id: 'daily-1', title: 'Daily Puzzle', desc: 'One featured puzzle each day.' };
+  // Dynamic daily puzzle locked to current date
+  const todayDateStr = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const todayPuzzleId = `daily-${new Date().toISOString().split('T')[0]}`;
+  const dailyPuzzle = { id: todayPuzzleId, title: `Daily Puzzle - ${todayDateStr}`, desc: 'One featured puzzle each day.' };
 
-  const matePuzzleSets = [
+  const mateCategories = [
     { id: 'mate-1', title: 'Mate in 1', desc: 'Spot the immediate checkmate pattern.' },
     { id: 'mate-2', title: 'Mate in 2', desc: 'Force a mate sequence in two moves.' },
     { id: 'mate-3', title: 'Mate in 3', desc: 'Complex forced sequences with one precise line.' },
     { id: 'mate-archive', title: 'Archive', desc: 'Solve archived mate-pattern puzzle packs.' },
-  ];
-
-  const archivePuzzles = [
-    { id: 'a-4721', title: 'Archive #4721 - Back Rank Pattern' },
-    { id: 'a-4684', title: 'Archive #4684 - Decoy Tactic' },
-    { id: 'a-4612', title: 'Archive #4612 - Defensive Resource' },
-    { id: 'a-4550', title: 'Archive #4550 - Zwischenzug Shot' },
   ];
 
   const tacticalCatalog = {
@@ -2949,116 +2944,214 @@ function PuzzlesTab({ onBack, playerRecords, setPlayerRecords }) {
     ],
   };
 
-  const tacticalSets = {
-    basic: ['Basic Set 1 - Fork & Pin Foundations', 'Basic Set 2 - Hanging Piece Conversion', 'Basic Set 3 - Back-Rank Strikes'],
-    intermediate: ['Intermediate Set 1 - Deflection Lines', 'Intermediate Set 2 - Overloading and Interference', 'Intermediate Set 3 - Zwischenzug Practice'],
-    advanced: ['Advanced Set 1 - Sacrifice Timing', 'Advanced Set 2 - Quiet Move Finishers', 'Advanced Set 3 - Multi-Motif Combinations'],
-    defensive: ['Defensive Set 1 - Threat Detection Drills', 'Defensive Set 2 - Only-Move Survival', 'Defensive Set 3 - Counterattack Resources'],
-  };
-
   const formatSeconds = (sec) => {
-    if (!Number.isFinite(sec)) return '--';
+    if (!Number.isFinite(sec) || sec == null) return '--';
     const m = Math.floor(sec / 60);
     const s = Math.floor(sec % 60).toString().padStart(2, '0');
     return `${m}:${s}`;
   };
 
-  const simulateAttemptSeconds = (low = 26, high = 76) => low + Math.floor(Math.random() * Math.max(1, high - low + 1));
-
   const dailyStats = playerRecords?.puzzles?.daily || {};
   const archiveStats = playerRecords?.puzzles?.archive || {};
+  
+  // Show all puzzles in the archive, but filter out corrupted/empty entries that lack a title
+  const archiveStatsList = Object.values(archiveStats).filter(stat => stat && stat.title);
 
   const updatePuzzleRecords = (updater) => {
     setPlayerRecords((prev) => {
-      const safePrev = prev || buildDefaultPlayerRecords();
+      const safePrev = prev || (buildDefaultPlayerRecords ? buildDefaultPlayerRecords() : { puzzles: { daily: {}, archive: {}, totals: {} }});
       return updater(safePrev);
     });
   };
 
-  const runDailyAttempt = (dailyId) => {
-    const solveSec = simulateAttemptSeconds(24, 72);
-    const success = Math.random() < 0.78;
+  // Add the daily puzzle to the archive at the beginning of the day (on mount)
+  useEffect(() => {
     updatePuzzleRecords((prev) => {
-      const current = prev.puzzles.daily[dailyId] || { tries: 0, solves: 0, myBest: null };
-      const next = {
-        tries: current.tries + 1,
-        solves: current.solves + (success ? 1 : 0),
-        myBest: success ? (current.myBest == null ? solveSec : Math.min(current.myBest, solveSec)) : current.myBest,
+      const archive = prev.puzzles.archive || {};
+      
+      // If today's puzzle is already in the archive, no state update is needed
+      if (archive[todayPuzzleId]) return prev;
+
+      const currentDaily = prev.puzzles.daily[todayPuzzleId] || { 
+        id: todayPuzzleId, 
+        title: dailyPuzzle.title, 
+        tries: 0, 
+        solves: 0, 
+        myBest: null 
       };
+
       return {
         ...prev,
         puzzles: {
           ...prev.puzzles,
-          daily: { ...prev.puzzles.daily, [dailyId]: next },
+          archive: {
+            ...prev.puzzles.archive,
+            [todayPuzzleId]: currentDaily
+          }
+        }
+      };
+    });
+  }, [todayPuzzleId]);
+
+  const recordAttempt = (id, title, isSuccess, timeTaken) => {
+    updatePuzzleRecords((prev) => {
+      const currentDaily = prev.puzzles.daily[id] || { id, title, tries: 0, solves: 0, myBest: null };
+      const nextDaily = {
+        ...currentDaily,
+        tries: currentDaily.tries + 1,
+        solves: currentDaily.solves + (isSuccess ? 1 : 0),
+        myBest: isSuccess ? (currentDaily.myBest == null ? timeTaken : Math.min(currentDaily.myBest, timeTaken)) : currentDaily.myBest,
+      };
+
+      return {
+        ...prev,
+        puzzles: {
+          ...prev.puzzles,
+          daily: { ...prev.puzzles.daily, [id]: nextDaily },
+          // Sync attempts directly with the archive if the puzzle exists there
+          archive: prev.puzzles.archive[id] ? { ...prev.puzzles.archive, [id]: nextDaily } : prev.puzzles.archive,
           totals: {
             ...prev.puzzles.totals,
             dailyAttempts: (prev.puzzles.totals.dailyAttempts || 0) + 1,
-            dailySolves: (prev.puzzles.totals.dailySolves || 0) + (success ? 1 : 0),
+            dailySolves: (prev.puzzles.totals.dailySolves || 0) + (isSuccess ? 1 : 0),
           },
         },
       };
     });
   };
 
-  const runArchiveAttempt = (archiveId) => {
-    const solveSec = simulateAttemptSeconds(22, 82);
-    const success = Math.random() < 0.72;
-    setSelectedArchiveId(archiveId);
-    updatePuzzleRecords((prev) => {
-      const current = prev.puzzles.archive[archiveId] || { tries: 0, solves: 0, myBest: null };
-      const next = {
-        tries: current.tries + 1,
-        solves: current.solves + (success ? 1 : 0),
-        myBest: success ? (current.myBest == null ? solveSec : Math.min(current.myBest, solveSec)) : current.myBest,
-      };
-      return {
-        ...prev,
-        puzzles: {
-          ...prev.puzzles,
-          archive: { ...prev.puzzles.archive, [archiveId]: next },
-          totals: {
-            ...prev.puzzles.totals,
-            archiveAttempts: (prev.puzzles.totals.archiveAttempts || 0) + 1,
-            archiveSolves: (prev.puzzles.totals.archiveSolves || 0) + (success ? 1 : 0),
-          },
-        },
-      };
+  const startPractice = (id, title, type) => {
+    setActivePractice({
+      id,
+      setTitle: title,
+      type,
+      puzzleIndex: 1,
+      totalPuzzles: (type === 'daily' || type === 'archive') ? 1 : 10,
+      startTime: Date.now(),
     });
   };
 
-  const runMateAttempt = (setTitle) => {
-    const solveSec = simulateAttemptSeconds(18, 64);
-    const success = Math.random() < 0.8;
-    updatePuzzleRecords((prev) => ({
-      ...prev,
-      puzzles: {
-        ...prev.puzzles,
-        totals: {
-          ...prev.puzzles.totals,
-          mateAttempts: (prev.puzzles.totals.mateAttempts || 0) + 1,
-          mateSolves: (prev.puzzles.totals.mateSolves || 0) + (success ? 1 : 0),
-        },
-      },
-    }));
-  };
+  const renderHeader = (titleText, backAction) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '16px 20px', borderBottom: '1px solid #1e293b', backgroundColor: '#0f172a' }}>
+      <button 
+        onClick={backAction} 
+        style={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          gap: '8px', 
+          backgroundColor: '#1e293b', 
+          color: '#f8fafc', 
+          border: '1px solid #334155', 
+          borderRadius: '8px', 
+          padding: '8px 14px', 
+          cursor: 'pointer',
+          fontWeight: 600,
+          fontSize: '14px'
+        }}
+      >
+        <ArrowLeft size={18} /> Back
+      </button>
+      <h2 style={{ margin: 0, color: '#f8fafc', fontSize: '20px', fontWeight: 700 }}>{titleText}</h2>
+    </div>
+  );
+
+  // Practice View
+  if (activePractice) {
+    return (
+      <div style={{ width: '100%' }}>
+        {renderHeader('Puzzles & Tactics', () => setActivePractice(null))}
+
+        <div style={{ maxWidth: '1220px', margin: '0 auto', width: '100%', padding: '18px 20px 24px 20px', boxSizing: 'border-box' }}>
+          <div style={{ padding: '16px', border: '1px solid #334155', borderRadius: '12px', backgroundColor: '#111827', marginBottom: '14px' }}>
+            <div style={{ fontSize: '18px', fontWeight: 700, color: '#f8fafc', marginBottom: '4px' }}>
+              {activePractice.setTitle}
+            </div>
+            <div style={{ color: '#cbd5e1', fontSize: '14px' }}>
+              Currently solving: {activePractice.setTitle} {activePractice.totalPuzzles > 1 ? `puzzle #${activePractice.puzzleIndex}` : ''}
+            </div>
+          </div>
+
+          {activePractice.totalPuzzles > 1 && (
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '14px' }}>
+              {Array.from({ length: activePractice.totalPuzzles }, (_, i) => i + 1).map((num) => (
+                <button
+                  key={num}
+                  onClick={() => setActivePractice((prev) => ({ ...prev, puzzleIndex: num }))}
+                  style={{
+                    padding: '8px 14px',
+                    borderRadius: '8px',
+                    border: activePractice.puzzleIndex === num ? '1px solid #6b7280' : '1px solid #334155',
+                    backgroundColor: activePractice.puzzleIndex === num ? '#374151' : '#0f172a',
+                    color: '#f3f4f6',
+                    cursor: 'pointer',
+                    fontWeight: 700,
+                    fontSize: '13px',
+                  }}
+                >
+                  #{num}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div style={{ padding: '24px', border: '1px solid #334155', borderRadius: '12px', backgroundColor: '#0b1220', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+            <div style={{ width: '100%', maxWidth: '440px', aspectRatio: '1/1', backgroundColor: '#0f172a', border: '2px dashed #475569', borderRadius: '8px', marginBottom: '20px', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+              <div style={{ color: '#cbd5e1', fontSize: '16px', fontWeight: 700, textAlign: 'center' }}>
+                {activePractice.setTitle} Board
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' }}>
+              {(activePractice.type !== 'daily' && activePractice.type !== 'archive') && (
+                <>
+                  <button
+                    disabled={activePractice.puzzleIndex <= 1}
+                    onClick={() => setActivePractice((prev) => ({ ...prev, puzzleIndex: Math.max(1, prev.puzzleIndex - 1) }))}
+                    style={{
+                      ...styles?.startTrainButton,
+                      backgroundColor: activePractice.puzzleIndex <= 1 ? '#1f2937' : '#374151',
+                      color: '#f3f4f6',
+                      border: '1px solid #6b7280',
+                      padding: '8px 16px',
+                      fontSize: '13px',
+                      opacity: activePractice.puzzleIndex <= 1 ? 0.5 : 1,
+                      cursor: activePractice.puzzleIndex <= 1 ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    Previous
+                  </button>
+                  <button
+                    disabled={activePractice.puzzleIndex >= activePractice.totalPuzzles}
+                    onClick={() => setActivePractice((prev) => ({ ...prev, puzzleIndex: Math.min(prev.totalPuzzles, prev.puzzleIndex + 1) }))}
+                    style={{
+                      ...styles?.startTrainButton,
+                      backgroundColor: activePractice.puzzleIndex >= activePractice.totalPuzzles ? '#1f2937' : '#374151',
+                      color: '#f3f4f6',
+                      border: '1px solid #6b7280',
+                      padding: '8px 16px',
+                      fontSize: '13px',
+                      opacity: activePractice.puzzleIndex >= activePractice.totalPuzzles ? 0.5 : 1,
+                      cursor: activePractice.puzzleIndex >= activePractice.totalPuzzles ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    Next Puzzle
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const activeDailyStat = dailyStats[dailyPuzzle.id] || { tries: 0, solves: 0, myBest: null };
-  const selectedArchiveMeta = archivePuzzles.find((p) => p.id === selectedArchiveId) || null;
-  const selectedArchiveStat = selectedArchiveMeta
-    ? (archiveStats[selectedArchiveMeta.id] || { tries: 0, solves: 0, myBest: null })
-    : { tries: 0, solves: 0, myBest: null };
-
   const activeDailySolveRate = activeDailyStat.tries > 0 ? Math.round((activeDailyStat.solves / activeDailyStat.tries) * 100) : null;
-  const selectedArchiveSolveRate = selectedArchiveStat.tries > 0 ? Math.round((selectedArchiveStat.solves / selectedArchiveStat.tries) * 100) : null;
+  const isDailySolved = activeDailyStat.solves > 0;
 
   return (
     <div style={{width: '100%'}}>
-      <div style={styles.header}>
-        <button onClick={onBack} style={styles.backButton}>
-          <ArrowLeft size={20} /> Back
-        </button>
-        <h2 style={styles.dashHeaderTitle}>Puzzles & Tactics</h2>
-      </div>
+      {renderHeader('Puzzles & Tactics', onBack)}
 
       <div style={{ maxWidth: '1220px', margin: '0 auto', width: '100%', padding: '18px 20px 24px 20px', boxSizing: 'border-box' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '10px', marginBottom: '14px' }}>
@@ -3091,13 +3184,17 @@ function PuzzlesTab({ onBack, playerRecords, setPlayerRecords }) {
           ))}
         </div>
 
+        {/* DAILY TAB */}
         {activeTab === 'daily' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div style={{ padding: '16px', border: '1px solid #334155', borderRadius: '12px', backgroundColor: '#111827' }}>
               <div style={{ fontSize: '18px', fontWeight: 700, color: '#f8fafc', marginBottom: '6px' }}>{dailyPuzzle.title}</div>
               <div style={{ color: '#cbd5e1', fontSize: '14px', marginBottom: '10px' }}>{dailyPuzzle.desc}</div>
-              <button onClick={() => runDailyAttempt(dailyPuzzle.id)} style={{ ...styles.startTrainButton, backgroundColor: '#374151', color: '#f3f4f6', border: '1px solid #6b7280', padding: '10px 14px', fontSize: '13px' }}>
-                Start Daily Puzzle
+              <button 
+                onClick={() => startPractice(dailyPuzzle.id, dailyPuzzle.title, 'daily')} 
+                style={{ ...styles?.startTrainButton, backgroundColor: '#374151', color: '#f3f4f6', border: '1px solid #6b7280', padding: '10px 14px', fontSize: '13px', cursor: 'pointer' }}
+              >
+                {isDailySolved ? 'Start Practice' : 'Start Daily Puzzle'}
               </button>
             </div>
 
@@ -3124,56 +3221,56 @@ function PuzzlesTab({ onBack, playerRecords, setPlayerRecords }) {
 
             <div style={{ padding: '16px', border: '1px solid #334155', borderRadius: '12px', backgroundColor: '#111827' }}>
               <div style={{ color: '#f8fafc', fontWeight: 700, marginBottom: '10px' }}>Puzzle Archive</div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '10px' }}>
-                {archivePuzzles.map((p) => {
-                  const stat = archiveStats[p.id] || { tries: 0, solves: 0, myBest: null };
-                  return (
-                    <div key={p.id} style={{ padding: '12px', border: '1px solid #334155', borderRadius: '10px', backgroundColor: selectedArchiveMeta?.id === p.id ? '#0f172a' : '#0b1220' }}>
-                      <div style={{ color: '#e5e7eb', fontWeight: 700, fontSize: '13px', marginBottom: '8px' }}>{p.title}</div>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px', marginBottom: '10px' }}>
+              {archiveStatsList.length === 0 ? (
+                <div style={{ color: '#94a3b8', fontSize: '14px', padding: '10px 0' }}>
+                  No puzzles archived yet. Complete a daily puzzle to build your archive!
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '10px' }}>
+                  {archiveStatsList.map((stat) => (
+                    <div key={stat.id} style={{ padding: '12px', border: '1px solid #334155', borderRadius: '10px', backgroundColor: '#0b1220' }}>
+                      <div style={{ color: '#e5e7eb', fontWeight: 700, fontSize: '13px', marginBottom: '8px' }}>{stat.title}</div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px', marginBottom: '12px' }}>
                         <div style={{ color: '#94a3b8', fontSize: '12px' }}>Tries: {stat.tries}</div>
                         <div style={{ color: '#94a3b8', fontSize: '12px' }}>Solves: {stat.solves}</div>
                         <div style={{ color: '#94a3b8', fontSize: '12px' }}>Best: {formatSeconds(stat.myBest)}</div>
                         <div style={{ color: '#94a3b8', fontSize: '12px' }}>Rate: {stat.tries > 0 ? `${Math.round((stat.solves / stat.tries) * 100)}%` : '--'}</div>
                       </div>
-                      <div style={{ display: 'flex', gap: '8px' }}>
-                        <button onClick={() => setSelectedArchiveId(p.id)} style={{ ...styles.startTrainButton, backgroundColor: '#1f2937', color: '#f3f4f6', border: '1px solid #4b5563', padding: '8px 10px', fontSize: '12px' }}>Select</button>
-                        <button onClick={() => runArchiveAttempt(p.id)} style={{ ...styles.startTrainButton, backgroundColor: '#374151', color: '#f3f4f6', border: '1px solid #6b7280', padding: '8px 10px', fontSize: '12px' }}>Start</button>
-                      </div>
+                      <button 
+                        onClick={() => startPractice(stat.id, stat.title, 'archive')} 
+                        style={{ ...styles?.startTrainButton, backgroundColor: '#374151', color: '#f3f4f6', border: '1px solid #6b7280', padding: '8px 10px', fontSize: '12px', width: '100%', cursor: 'pointer' }}
+                      >
+                        Start Practice
+                      </button>
                     </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {selectedArchiveMeta && (
-              <div style={{ padding: '16px', border: '1px solid #334155', borderRadius: '12px', backgroundColor: '#0b1220' }}>
-                <div style={{ color: '#f8fafc', fontWeight: 700, marginBottom: '10px' }}>Selected Archive Record: {selectedArchiveMeta.title}</div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '10px' }}>
-                  <div><div style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase' }}>My Best</div><div style={{ color: '#f8fafc', fontSize: '20px', fontWeight: 700 }}>{formatSeconds(selectedArchiveStat.myBest)}</div></div>
-                    <div><div style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase' }}>Solve Rate</div><div style={{ color: '#f8fafc', fontSize: '20px', fontWeight: 700 }}>{selectedArchiveSolveRate == null ? '--' : `${selectedArchiveSolveRate}%`}</div></div>
-                  <div><div style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase' }}>Total Tries</div><div style={{ color: '#f8fafc', fontSize: '20px', fontWeight: 700 }}>{selectedArchiveStat.tries}</div></div>
-                  <div><div style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase' }}>Total Solves</div><div style={{ color: '#f8fafc', fontSize: '20px', fontWeight: 700 }}>{selectedArchiveStat.solves}</div></div>
+                  ))}
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         )}
 
+        {/* MATE TAB */}
         {activeTab === 'mate' && (
-          <div style={{ display: 'grid', gap: '10px' }}>
-            {matePuzzleSets.map((m) => (
-              <div key={m.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '14px 16px', border: '1px solid #334155', borderRadius: '12px', backgroundColor: '#111827' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {mateCategories.map((cat) => (
+              <div key={cat.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', border: '1px solid #334155', borderRadius: '12px', backgroundColor: '#111827' }}>
                 <div>
-                  <div style={{ color: '#f8fafc', fontWeight: 700 }}>{m.title}</div>
-                  <div style={{ color: '#94a3b8', fontSize: '13px' }}>{m.desc}</div>
+                  <div style={{ color: '#f8fafc', fontWeight: 700, fontSize: '16px' }}>{cat.title}</div>
+                  <div style={{ color: '#94a3b8', fontSize: '13px', marginTop: '2px' }}>{cat.desc}</div>
                 </div>
-                <button onClick={() => runMateAttempt(m.title)} style={{ ...styles.startTrainButton, backgroundColor: '#374151', color: '#f3f4f6', border: '1px solid #6b7280' }}>Start</button>
+                <button
+                  onClick={() => startPractice(cat.id, cat.title, 'mate')}
+                  style={{ ...styles?.startTrainButton, backgroundColor: '#374151', color: '#f3f4f6', border: '1px solid #6b7280', padding: '8px 16px', borderRadius: '6px', fontSize: '13px', cursor: 'pointer' }}
+                >
+                  Start
+                </button>
               </div>
             ))}
           </div>
         )}
 
+        {/* TACTICAL TAB */}
         {activeTab === 'tactical' && (
           <div>
             {!selectedTacticalBand ? (
@@ -3186,7 +3283,7 @@ function PuzzlesTab({ onBack, playerRecords, setPlayerRecords }) {
                 ].map((band) => (
                   <div key={band.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '14px 16px', border: '1px solid #334155', borderRadius: '12px', backgroundColor: '#111827' }}>
                     <div style={{ color: '#f8fafc', fontWeight: 700 }}>{band.title}</div>
-                    <button onClick={() => setSelectedTacticalBand(band.id)} style={{ ...styles.startTrainButton, backgroundColor: '#374151', color: '#f3f4f6', border: '1px solid #6b7280' }}>Start</button>
+                    <button onClick={() => setSelectedTacticalBand(band.id)} style={{ ...styles?.startTrainButton, backgroundColor: '#374151', color: '#f3f4f6', border: '1px solid #6b7280', padding: '8px 12px', borderRadius: '6px', cursor: 'pointer' }}>Select</button>
                   </div>
                 ))}
               </div>
@@ -3197,158 +3294,538 @@ function PuzzlesTab({ onBack, playerRecords, setPlayerRecords }) {
                     <div style={{ color: '#f8fafc', fontWeight: 700, marginBottom: '3px' }}>{selectedTacticalBand.charAt(0).toUpperCase() + selectedTacticalBand.slice(1)} Tactics</div>
                     <div style={{ color: '#94a3b8', fontSize: '13px' }}>Select which tactic set to practice.</div>
                   </div>
-                  <button onClick={() => setSelectedTacticalBand(null)} style={{ ...styles.startTrainButton, backgroundColor: '#1f2937', color: '#e5e7eb', border: '1px solid #4b5563' }}>Back</button>
-                </div>
-
-                <div style={{ padding: '14px 16px', border: '1px solid #334155', borderRadius: '12px', backgroundColor: '#0f172a' }}>
-                  <div style={{ color: '#f8fafc', fontWeight: 700, marginBottom: '8px' }}>Themes</div>
-                  <ul style={{ margin: 0, paddingLeft: '18px', color: '#cbd5e1', fontSize: '13px', lineHeight: '1.55' }}>
-                    {tacticalCatalog[selectedTacticalBand].map((line) => (
-                      <li key={line}>{line}</li>
-                    ))}
-                  </ul>
+                  <button onClick={() => setSelectedTacticalBand(null)} style={{ ...styles?.startTrainButton, backgroundColor: '#1f2937', color: '#e5e7eb', border: '1px solid #4b5563', padding: '8px 12px', borderRadius: '6px', cursor: 'pointer' }}>Back</button>
                 </div>
 
                 <div style={{ padding: '14px 16px', border: '1px solid #334155', borderRadius: '12px', backgroundColor: '#111827' }}>
-                  <div style={{ color: '#f8fafc', fontWeight: 700, marginBottom: '8px' }}>Pre-made Sets</div>
-                  <div style={{ display: 'grid', gap: '8px' }}>
-                    {tacticalSets[selectedTacticalBand].map((setName) => (
-                      <div key={setName} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', padding: '10px 12px', borderRadius: '10px', border: '1px solid #243244', backgroundColor: '#0f172a' }}>
-                        <div style={{ color: '#e5e7eb', fontSize: '13px' }}>{setName}</div>
-                        <button onClick={() => {
-                          updatePuzzleRecords((prev) => ({
-                            ...prev,
-                            puzzles: {
-                              ...prev.puzzles,
-                              totals: {
-                                ...prev.puzzles.totals,
-                                tacticalStarts: (prev.puzzles.totals.tacticalStarts || 0) + 1,
-                              },
-                            },
-                          }));
-                        }} style={{ ...styles.startTrainButton, backgroundColor: '#374151', color: '#f3f4f6', border: '1px solid #6b7280', fontSize: '12px' }}>Start</button>
-                      </div>
-                    ))}
+                  <div style={{ color: '#f8fafc', fontWeight: 700, marginBottom: '12px' }}>Pre-made Tactical Sets</div>
+                  <div style={{ display: 'grid', gap: '10px' }}>
+                    {tacticalCatalog[selectedTacticalBand].map((tacticLine) => {
+                      const [name, desc] = tacticLine.split(' - ');
+                      return (
+                        <div key={name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', padding: '12px', borderRadius: '10px', border: '1px solid #243244', backgroundColor: '#0f172a' }}>
+                          <div>
+                            <div style={{ color: '#e5e7eb', fontSize: '14px', fontWeight: 600, marginBottom: '2px' }}>{name}</div>
+                            <div style={{ color: '#94a3b8', fontSize: '12px' }}>{desc}</div>
+                          </div>
+                          <button 
+                            onClick={() => startPractice(name, name, 'tactical')} 
+                            style={{ ...styles?.startTrainButton, backgroundColor: '#374151', color: '#f3f4f6', border: '1px solid #6b7280', fontSize: '12px', padding: '8px 16px', borderRadius: '6px', whiteSpace: 'nowrap', cursor: 'pointer' }}
+                          >
+                            Start
+                          </button>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
             )}
           </div>
         )}
-
       </div>
     </div>
   );
 }
 
 // --- 4C. Guess and Explain ---
-function GuessAndExplainTab({ onBack }) {
-  const [assistModes, setAssistModes] = useState({
-    legalMoves: false,
-    cctPlusReminder: false,
-    checkWarnings: false,
-    blunderWarnings: false,
-    threatWarnings: false,
-  });
+function GuessAndExplainTab({ onBack, styles }) {
+  const [selectedGameId, setSelectedGameId] = useState('immortal');
+  const [sessionStarted, setSessionStarted] = useState(false);
 
-  const toggleAssist = (key) => {
-    setAssistModes((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
+  // SubStates: 'simulating_pre' -> 'predict' -> 'explain' -> 'reveal' -> 'simulating_final' -> 'finished'
+  const [subState, setSubState] = useState('simulating_pre');
+  const [phaseIndex, setPhaseIndex] = useState(0);
+  
+  const [playerMove, setPlayerMove] = useState(null);
+  const [playerExplanation, setPlayerExplanation] = useState('');
+  const [showHint, setShowHint] = useState(false);
+  const [moveQueue, setMoveQueue] = useState([]);
 
-  const enabledModes = [
-    ['legalMoves', 'Legal move guidance keeps candidate moves visible during pause positions.'],
-    ['cctPlusReminder', 'CCT+ reminder prompts checks, captures, and threats before you commit.'],
-    ['checkWarnings', 'Check warnings flag forced king-safety moments before the answer is shown.'],
-    ['blunderWarnings', 'Blunder warnings mark candidate moves that drop material or miss the tactic.'],
-    ['threatWarnings', 'Threat warnings explain the opponent\'s main idea before you respond.'],
-  ].filter(([key]) => assistModes[key]);
+  // Use a ref to hold the active chess instance so intervals don't suffer from stale state
+  const chessRef = useRef(new Chess());
+  const [sessionBoardPosition, setSessionBoardPosition] = useState(chessRef.current.fen());
 
-  const guessAndExplainCollections = [
+  // Updated Data Structure to handle full match simulation and checkpoints
+  const famousSceneOptions = [
     {
-      era: '19th Century (The Romantic Era)',
-      games: [
-        'The Immortal Game (1851): Adolf Anderssen vs. Lionel Kieseritzky. White sacrificed both rooks, a bishop, and his queen to checkmate Black with only three minor pieces.',
-        'The Opera Game (1858): Paul Morphy vs. Duke Karl / Count Isouard. A masterclass in rapid piece development and king safety, played during an opera in Paris.',
+      id: 'immortal',
+      era: '1851 | King\'s Gambit',
+      title: 'The Immortal Game',
+      subtitle: 'Adolf Anderssen vs. Lionel Kieseritzky',
+      phases: [
+        {
+          preMoves: ['e4', 'e5', 'f4', 'exf4', 'Bc4', 'Qh4+', 'Kf1', 'b5', 'Bxb5', 'Nf6', 'Nf3', 'Qh6', 'd3', 'Nh5', 'Nh4', 'Qg5', 'Nf5', 'c6', 'g4', 'Nf6', 'Rg1', 'cxb5', 'h4', 'Qg6', 'h5', 'Qg5', 'Qf3', 'Ng8', 'Bxf4', 'Qf6', 'Nc3', 'Bc5', 'Nd5', 'Qxb2'],
+          historicMove: 'Bd6',
+          hint: 'What key attacking piece is Anderssen sacrificing to build a mating net?',
+          tacticalIdea: 'Sacrificing both rooks and the bishop to trap the black king in the center.',
+        },
+        {
+          preMoves: ['Bxg1', 'e5', 'Qxa1+', 'Ke2', 'Na6', 'Nxg7+', 'Kd8', 'Qf6+', 'Nxf6'],
+          historicMove: 'Be7#',
+          hint: 'How does white deliver the final blow with the remaining active pieces?',
+          tacticalIdea: 'A beautiful checkmate utilizing the remaining active minor pieces.',
+        }
       ],
+      finalMoves: []
     },
     {
-      era: '20th Century (The Golden Era & World Championships)',
-      games: [
-        'The Game of the Century (1956): Donald Byrne vs. Bobby Fischer. A 13-year-old Fischer shocked the world with a brilliant queen sacrifice against a top master.',
-        'Kasparov\'s Immortal (1999): Garry Kasparov vs. Veselin Topalov. An incredibly complex rook sacrifice that launched a historic 15-move king hunt.',
+      id: 'opera',
+      era: '1858 | Philidor Defense',
+      title: 'The Opera Game',
+      subtitle: 'Paul Morphy vs. Duke of Brunswick & Count Isouard',
+      phases: [
+        {
+          preMoves: ['e4', 'e5', 'Nf3', 'd6', 'd4', 'Bg4', 'dxe5', 'Bxf3', 'Qxf3', 'dxe5', 'Bc4', 'Nf6', 'Qb3', 'Qe7', 'Nc3', 'c6', 'Bg5', 'b5', 'Nxb5', 'cxb5', 'Bxb5+', 'Nbd7', 'O-O-O', 'Rd8', 'Rxd7', 'Rxd7', 'Rd1', 'Qe6', 'Bxd7+', 'Nxd7'],
+          historicMove: 'Qb8+',
+          hint: 'Can you force the knight away from defending the critical d8 square?',
+          tacticalIdea: 'Queen sacrifice to draw the defender and force the mating net.',
+        },
+        {
+          preMoves: ['Nxb8'],
+          historicMove: 'Rd8#',
+          hint: 'Deliver the mate.',
+          tacticalIdea: 'Rook delivers mate, supported beautifully by the bishop.',
+        }
       ],
+      finalMoves: []
     },
+    {
+      id: 'game-of-century',
+      era: '1956 | Grünfeld Defense',
+      title: 'The Game of the Century',
+      subtitle: 'Donald Byrne vs. Bobby Fischer',
+      phases: [
+        {
+          preMoves: ['Nf3', 'Nf6', 'c4', 'g6', 'Nc3', 'Bg7', 'd4', 'O-O', 'Bf4', 'd5', 'Qb3', 'dxc4', 'Qxc4', 'c6', 'e4', 'Nbd7', 'Rd1', 'Nb6', 'Qc5', 'Bg4', 'Bg5', 'Na4', 'Qa3', 'Nxc3', 'bxc3', 'Nxe4', 'Bxe7', 'Qb6', 'Bc4', 'Nxc3', 'Bc5', 'Rfe8+', 'Kf1'],
+          historicMove: 'Be6',
+          hint: 'Is there a way to offer the Queen for a devastating, multi-move attack?',
+          tacticalIdea: 'Offering the Queen to unleash a devastating discovered attack.'
+        }
+      ],
+      finalMoves: ['Bxb6', 'Bxc4+', 'Kg1', 'Ne2+', 'Kf1', 'Nxd4+', 'Kg1', 'Ne2+', 'Kf1', 'Nc3+', 'Kg1', 'axb6', 'Qb4', 'Ra4', 'Qxb6', 'Nxd1']
+    },
+    {
+      id: 'kasparov-immortal',
+      era: '1999 | Pirc Defense',
+      title: 'Kasparov\'s Immortal',
+      subtitle: 'Garry Kasparov vs. Veselin Topalov',
+      phases: [
+        {
+          preMoves: ['e4', 'd6', 'd4', 'Nf6', 'Nc3', 'g6', 'Be3', 'Bg7', 'Qd2', 'c6', 'f3', 'b5', 'Nge2', 'Nbd7', 'Bh6', 'Bxh6', 'Qxh6', 'Bb7', 'a3', 'e5', 'O-O-O', 'Qe7', 'Kb1', 'a6', 'Nc1', 'O-O-O', 'Nb3', 'exd4', 'Rxd4', 'c5', 'Rd1', 'Nb6', 'g3', 'Kb8', 'Na5', 'Ba8', 'Bh3', 'd5', 'Qf4+', 'Ka7', 'Rhe1', 'd4', 'Nd5', 'Nbxd5', 'exd5', 'Qd6'],
+          historicMove: 'Rxd4',
+          hint: 'How can white break open the center and drag the black king into the open?',
+          tacticalIdea: 'A spectacular Rook sacrifice that initiates a relentless, board-spanning King hunt.',
+        }
+      ],
+      finalMoves: ['cxd4', 'Re7+', 'Kb6', 'Qxd4+', 'Kxa5', 'b4+', 'Ka4', 'Qc3', 'Qxd5', 'Ra7', 'Bb7', 'Rxb7', 'Qc4', 'Qxf6', 'Kxa3', 'Qxa6+', 'Kxb4', 'c3+', 'Kxc3', 'Qa1+', 'Kd2', 'Qb2+', 'Kd1', 'Bf1']
+    },
+    {
+      id: 'capablanca-tartakower-1924',
+      era: '1924 | Queen\'s Gambit Declined',
+      title: 'Capablanca vs. Tartakower',
+      subtitle: 'A brilliant positional and tactical finish.',
+      phases: [
+        {
+          preMoves: ['d4', 'Nf6', 'c4', 'e6', 'Nc3', 'Bb4', 'a3', 'Bxc3+', 'bxc3', 'O-O', 'f3', 'd5', 'cxd5', 'exd5', 'e3', 'Bf5', 'Ne2', 'Nbd7', 'Ng3', 'Bg6', 'Bd3', 'c5', 'O-O', 'Re8', 'e4', 'dxe4', 'fxe4', 'cxd4', 'cxd4', 'Nb6', 'Bb2', 'Rc8', 'Qe2', 'Nfd5', 'Qf3', 'Nc4', 'Bxc4', 'Rxc4', 'Rae1', 'Qb6', 'exd5', 'Rxe1', 'Rxe1', 'Qxb2'],
+          historicMove: 'Re8#',
+          hint: 'You are Capablanca. What would you play? The player must recognize the mating threat and coordinate the Rook and Queen.',
+          tacticalIdea: 'Piece coordination and tactical awareness can turn a seemingly quiet position into a decisive attack.',
+        }
+      ],
+      finalMoves: []
+    },
+    {
+      id: 'kasparov-karpov-1985',
+      era: '1985 | Sicilian Defense',
+      title: 'Kasparov vs. Karpov',
+      subtitle: 'Kasparov\'s famous attacking victory.',
+      phases: [
+        {
+          preMoves: ['e4', 'c5', 'Nf3', 'e6', 'd4', 'cxd4', 'Nxd4', 'Nc6', 'Nc3', 'Qc7', 'Be2', 'a6', 'O-O', 'Nf6', 'Be3', 'Bb4', 'Na4', 'Be7', 'Nxc6', 'dxc6', 'f4', 'e5', 'f5', 'Bb7', 'Qd3', 'Rd8', 'Qc4', 'c5', 'Nc3', 'Rd4', 'Qb3', 'Rb4', 'Qa3', 'Nxe4', 'Nxe4', 'Rxe4', 'Bf3', 'c4', 'Qc3', 'Rh4', 'g3', 'e4', 'Bg2'],
+          historicMove: 'Rxh2',
+          hint: 'You are Karpov. How would you respond to this sacrifice?',
+          tacticalIdea: 'Tactical calculation, king exposure, and sacrifices can create a decisive attack.',
+        }
+      ],
+      finalMoves: ['Bf4', 'Rxg2+', 'Kxg2', 'e3+', 'Kh2', 'Qc6', 'Rf3', 'Qxf3', 'Rg1', 'Qh5#']
+    }
   ];
 
-  return (
+  const activeSession = famousSceneOptions.find((game) => game.id === selectedGameId) || famousSceneOptions[0];
+  const currentPhase = activeSession.phases[phaseIndex] || activeSession.phases[0];
+
+  const startInteractiveSession = () => {
+    chessRef.current.reset(); // Always start from standard opening position
+    setSessionBoardPosition(chessRef.current.fen());
+    setPhaseIndex(0);
+    setSubState('simulating_pre');
+    setMoveQueue([...activeSession.phases[0].preMoves]);
+    setPlayerMove(null);
+    setPlayerExplanation('');
+    setShowHint(false);
+    setSessionStarted(true);
+  };
+
+  // Auto-Simulation Hook
+  useEffect(() => {
+    let timer;
+    if ((subState === 'simulating_pre' || subState === 'simulating_final') && moveQueue.length > 0) {
+      timer = setInterval(() => {
+        const move = moveQueue[0];
+        try {
+          chessRef.current.move(move);
+          setSessionBoardPosition(chessRef.current.fen());
+        } catch (e) {
+          console.warn(`Simulation failed for move: ${move}`);
+        }
+        setMoveQueue((prev) => prev.slice(1));
+      }, 350); // Fast simulation speed (350ms per move)
+    } else if (moveQueue.length === 0) {
+      if (subState === 'simulating_pre') {
+        setSubState('predict');
+      } else if (subState === 'simulating_final') {
+        setSubState('finished');
+      }
+    }
+    
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [moveQueue, subState]);
+
+  const handleSessionMove = (sourceSquare, targetSquare) => {
+    if (subState !== 'predict') return false;
+
+    try {
+      const moveObj = chessRef.current.move({ from: sourceSquare, to: targetSquare, promotion: 'q' });
+      if (moveObj) {
+        setPlayerMove(moveObj.san);
+        chessRef.current.undo(); // Revert back to checkpoint position immediately
+        setSubState('explain');
+        return true;
+      }
+    } catch (e) {
+      return false; 
+    }
+    return false;
+  };
+
+  const submitExplanation = () => {
+    setSubState('reveal');
+  };
+
+  const handleContinueSimulation = () => {
+    // Play the historic move internally before continuing
+    try {
+      chessRef.current.move(currentPhase.historicMove);
+      setSessionBoardPosition(chessRef.current.fen());
+    } catch (e) {}
+
+    const nextPhaseIndex = phaseIndex + 1;
+    if (nextPhaseIndex < activeSession.phases.length) {
+      setPhaseIndex(nextPhaseIndex);
+      setSubState('simulating_pre');
+      setMoveQueue([...activeSession.phases[nextPhaseIndex].preMoves]);
+    } else {
+      setSubState('simulating_final');
+      setMoveQueue([...(activeSession.finalMoves || [])]);
+    }
+    
+    setPlayerMove(null);
+    setPlayerExplanation('');
+    setShowHint(false);
+  };
+
+  const renderSetup = () => (
     <div style={{ width: '100%', height: '100vh', maxHeight: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <div style={styles.header}>
-        <button onClick={onBack} style={styles.backButton}>
-          <ArrowLeft size={20} /> Back
+      {/* Header section explicitly styled to match Puzzles & Tactics image */}
+      <div style={{ padding: '16px 24px', display: 'flex', alignItems: 'center', backgroundColor: '#0f172a', borderBottom: '1px solid #1e293b' }}>
+        <button onClick={onBack} style={{ 
+          padding: '8px 16px', 
+          backgroundColor: '#1e293b', 
+          color: '#f8fafc', 
+          border: '1px solid #334155', // Outlined exactly like Image 2
+          borderRadius: '6px', 
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          fontWeight: 500,
+          fontSize: '14px'
+        }}>
+          <ArrowLeft size={18} /> Back
         </button>
-        <h2 style={styles.dashHeaderTitle}>Guess and Explain</h2>
+        <h2 style={{ 
+          marginLeft: '20px', 
+          color: '#f8fafc', 
+          margin: 0,
+          fontSize: '22px',
+          fontWeight: 600,
+          fontFamily: 'Georgia, serif' // Match title styling
+        }}>Guess and Explain</h2>
       </div>
 
-      <div style={{ flex: 1, maxWidth: '1060px', width: '100%', margin: '0 auto', padding: '10px 24px 14px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px', overflow: 'hidden' }}>
-        <div style={{ textAlign: 'center' }}>
+      <div style={{ flex: 1, maxWidth: '1060px', width: '100%', margin: '0 auto', padding: '20px 24px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '24px', overflow: 'hidden' }}>
+        <div style={{ textAlign: 'center', marginTop: '10px' }}>
           <Lightbulb size={36} color="#fcd34d" style={{ marginBottom: '8px' }} />
-          <h2 style={{ fontSize: '24px', margin: '0 0 6px 0' }}>Learn While Playing</h2>
-          <p style={{ color: '#cbd5e1', fontSize: '18px', lineHeight: '1.6' }}>
-            The system pauses famous or instructional games and asks you: <br/>
-            <strong>"You are the player. What would you play?"</strong>
+          <h2 style={{ fontSize: '24px', margin: '0 0 6px 0', color: '#f8fafc' }}>Learn While Playing</h2>
+          <p style={{ color: '#cbd5e1', fontSize: '16px', lineHeight: '1.6', margin: 0 }}>
+            Simulate historical games from the start. The engine will pause at major checkpoints and ask:<br/>
+            <strong>"You are the player. What would you play here?"</strong>
           </p>
         </div>
 
-        <div style={{ ...styles.controlBox, padding: '14px 16px' }}>
-          <h3 style={{ ...styles.controlBoxTitle, marginBottom: '8px' }}>Optional Assistance Modes</h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '8px' }}>
-              {[
-                ['legalMoves', 'Legal Move Guidance'],
-                ['cctPlusReminder', 'CCT+ Reminder'],
-              ].map(([key, label]) => (
-                <label key={key} style={{ ...styles.checkboxLabel, minHeight: '44px', padding: '10px 12px', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: '#f8fafc' }}>
-                  <input type="checkbox" checked={assistModes[key]} onChange={() => toggleAssist(key)} /> {label}
-                </label>
-              ))}
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '8px' }}>
-              {[
-                ['checkWarnings', 'Check Warnings'],
-                ['blunderWarnings', 'Blunder Warnings'],
-                ['threatWarnings', 'Threat Warnings'],
-              ].map(([key, label]) => (
-                <label key={key} style={{ ...styles.checkboxLabel, minHeight: '44px', padding: '10px 12px', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: '#f8fafc' }}>
-                  <input type="checkbox" checked={assistModes[key]} onChange={() => toggleAssist(key)} /> {label}
-                </label>
-              ))}
-            </div>
+        <div style={{ flex: 1, minHeight: 0, backgroundColor: '#111827', border: '1px solid #334155', borderRadius: '12px', padding: '24px', display: 'flex', flexDirection: 'column' }}>
+          <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', color: '#f8fafc' }}>Select a Historical Match</h3>
+          
+          <div style={{ flex: 1, overflowY: 'auto', display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '16px', alignContent: 'start' }}>
+            {famousSceneOptions.map((game) => (
+              <button
+                key={game.id}
+                type="button"
+                onClick={() => setSelectedGameId(game.id)}
+                style={{
+                  textAlign: 'left',
+                  padding: '20px',
+                  borderRadius: '10px',
+                  backgroundColor: selectedGameId === game.id ? '#1d4ed8' : '#1e293b',
+                  border: selectedGameId === game.id ? '2px solid #60a5fa' : '2px solid transparent',
+                  cursor: 'pointer',
+                  color: '#f8fafc',
+                  transition: 'all 0.2s'
+                }}
+              >
+                <div style={{ color: selectedGameId === game.id ? '#93c5fd' : '#94a3b8', fontWeight: 700, fontSize: '12px', marginBottom: '8px' }}>{game.era}</div>
+                <div style={{ fontWeight: 700, fontSize: '18px', marginBottom: '6px' }}>{game.title}</div>
+                <div style={{ color: selectedGameId === game.id ? '#e0e7ff' : '#cbd5e1', fontSize: '14px', lineHeight: '1.45' }}>{game.subtitle}</div>
+              </button>
+            ))}
           </div>
+          
+          <button
+            onClick={startInteractiveSession}
+            style={{ width: '100%', padding: '16px', backgroundColor: '#3b82f6', color: '#fff', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: 700, fontSize: '16px', marginTop: '20px' }}
+          >
+            Launch Interactive Session
+          </button>
         </div>
-
-        <div style={{ ...styles.controlBox, flex: 1, minHeight: 0, padding: '14px 16px', overflow: 'hidden', display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '10px' }}>
-          {guessAndExplainCollections.map((collection) => (
-            <div key={collection.era} style={{ padding: '12px', borderRadius: '10px', backgroundColor: '#0f172a', border: '1px solid #334155', minHeight: 0 }}>
-              <div style={{ color: '#f8fafc', fontWeight: 700, fontSize: '14px', marginBottom: '8px' }}>{collection.era}</div>
-              <div style={{ display: 'grid', gap: '8px' }}>
-                {collection.games.map((gameText) => (
-                  <div key={gameText} style={{ color: '#cbd5e1', fontSize: '12px', lineHeight: '1.4' }}>{gameText}</div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <button style={{ width: '100%', padding: '12px 18px', backgroundColor: '#334155', color: '#e2e8f0', border: '1px solid #475569', borderRadius: '10px', cursor: 'pointer', fontWeight: 700, fontSize: '14px' }}>
-          Launch Interactive Session{enabledModes.length ? ` • ${enabledModes.length} modes active` : ''}
-        </button>
       </div>
     </div>
   );
+
+  const renderSession = () => (
+    <div style={{ width: '100%', height: '100vh', maxHeight: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* Matching Header during session as well */}
+      <div style={{ padding: '16px 24px', display: 'flex', alignItems: 'center', backgroundColor: '#0f172a', borderBottom: '1px solid #1e293b' }}>
+        <button onClick={() => setSessionStarted(false)} style={{ 
+          padding: '8px 16px', 
+          backgroundColor: '#1e293b', 
+          color: '#f8fafc', 
+          border: '1px solid #334155', 
+          borderRadius: '6px', 
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          fontWeight: 500,
+          fontSize: '14px'
+        }}>
+          <ArrowLeft size={18} /> End Session
+        </button>
+        <h2 style={{ 
+          marginLeft: '20px', 
+          color: '#f8fafc', 
+          margin: 0,
+          fontSize: '22px',
+          fontWeight: 600,
+          fontFamily: 'Georgia, serif'
+        }}>Guess and Explain</h2>
+      </div>
+
+      <div style={{ flex: 1, maxWidth: '1100px', width: '100%', margin: '0 auto', padding: '24px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '20px', overflow: 'hidden' }}>
+        <div style={{ textAlign: 'center' }}>
+          <h2 style={{ fontSize: '26px', margin: '0 0 8px 0', color: '#f8fafc' }}>{activeSession.title}</h2>
+          <p style={{ color: '#94a3b8', fontSize: '15px', margin: 0 }}>{activeSession.subtitle}</p>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '24px', alignItems: 'stretch', flex: 1, minHeight: 0 }}>
+          
+          {/* Left Column: Board */}
+          <div style={{ backgroundColor: '#111827', border: '1px solid #334155', borderRadius: '12px', padding: '20px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+            <div style={{ marginBottom: '16px', width: '100%', display: 'flex', justifyContent: 'center' }}>
+              <Chessboard
+                id={`guess-explain-${activeSession.id}`}
+                boardWidth={460}
+                position={sessionBoardPosition}
+                onPieceDrop={subState === 'predict' ? handleSessionMove : () => false}
+                customDarkSquare="#b58863"
+                customLightSquare="#f0d9b5"
+                customBoardStyle={{ borderRadius: '6px', boxShadow: '0 8px 20px rgba(15, 23, 42, 0.35)' }}
+                animationDuration={subState === 'simulating_pre' || subState === 'simulating_final' ? 200 : 300}
+              />
+            </div>
+            <div style={{ color: '#94a3b8', fontSize: '13px' }}>
+              {subState === 'predict' ? 'Make your move directly on the board.' : 
+               subState === 'explain' || subState === 'reveal' ? `You played: ${playerMove}` : 
+               'Watch the simulation...'}
+            </div>
+          </div>
+
+          {/* Right Column: Interaction Flow */}
+          <div style={{ backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: '12px', padding: '24px', display: 'flex', flexDirection: 'column' }}>
+            
+            {/* Phase: Simulating */}
+            {(subState === 'simulating_pre' || subState === 'simulating_final') && (
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                <FastForward size={48} color="#60a5fa" style={{ marginBottom: '20px' }} />
+                <div style={{ fontSize: '20px', fontWeight: 700, color: '#f8fafc', marginBottom: '8px' }}>
+                  Simulating Match
+                </div>
+                <div style={{ color: '#94a3b8', fontSize: '15px', textAlign: 'center' }}>
+                  {subState === 'simulating_pre' 
+                    ? `Fast-forwarding to Checkpoint ${phaseIndex + 1}...` 
+                    : 'Playing out the final moves...'}
+                </div>
+              </div>
+            )}
+
+            {/* Phase: Predict */}
+            {subState === 'predict' && (
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                <div style={{ fontSize: '20px', fontWeight: 700, color: '#fcd34d', marginBottom: '20px' }}>Prediction Checkpoint {phaseIndex + 1}</div>
+                
+                <div style={{ color: '#f8fafc', fontSize: '17px', lineHeight: '1.6' }}>
+                  <strong>Your Challenge:</strong> You are the player. What would you play here?
+                  <br /><br />
+                  <span style={{ color: '#94a3b8' }}>Make a move on the board to lock in your answer.</span>
+                </div>
+
+                <div style={{ marginTop: 'auto' }}>
+                  {!showHint ? (
+                    <button
+                      onClick={() => setShowHint(true)}
+                      style={{ padding: '10px 16px', backgroundColor: '#1e293b', color: '#94a3b8', border: '1px solid #334155', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}
+                    >
+                      <Lightbulb size={16} /> Show Hint
+                    </button>
+                  ) : (
+                    <div style={{ padding: '16px', backgroundColor: '#3f2c00', borderLeft: '4px solid #fcd34d', borderRadius: '8px', color: '#fde68a', fontSize: '14px', lineHeight: '1.5' }}>
+                      <strong>Hint:</strong> {currentPhase.hint}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Phase: Explain */}
+            {subState === 'explain' && (
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                <div style={{ fontSize: '20px', fontWeight: 700, color: '#60a5fa', marginBottom: '16px' }}>Explain Your Move</div>
+                <div style={{ color: '#e2e8f0', fontSize: '15px', marginBottom: '12px' }}>
+                  Why did you choose <strong>{playerMove}</strong>?
+                </div>
+                <textarea
+                  value={playerExplanation}
+                  onChange={(e) => setPlayerExplanation(e.target.value)}
+                  placeholder="Explain your tactical idea or positional reasoning..."
+                  style={{
+                    flex: 1,
+                    width: '100%',
+                    backgroundColor: '#1e293b',
+                    border: '1px solid #475569',
+                    borderRadius: '8px',
+                    padding: '12px',
+                    color: '#f8fafc',
+                    fontSize: '14px',
+                    resize: 'none',
+                    marginBottom: '20px',
+                    boxSizing: 'border-box'
+                  }}
+                />
+                <button
+                  onClick={submitExplanation}
+                  disabled={!playerExplanation.trim()}
+                  style={{
+                    padding: '14px',
+                    backgroundColor: playerExplanation.trim() ? '#3b82f6' : '#334155',
+                    color: playerExplanation.trim() ? '#fff' : '#94a3b8',
+                    border: 'none',
+                    borderRadius: '8px',
+                    fontWeight: 700,
+                    cursor: playerExplanation.trim() ? 'pointer' : 'not-allowed',
+                    transition: 'background-color 0.2s'
+                  }}
+                >
+                  Reveal Historical Move
+                </button>
+              </div>
+            )}
+
+            {/* Phase: Reveal / Compare */}
+            {subState === 'reveal' && (
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
+                <div style={{ fontSize: '20px', fontWeight: 700, color: '#34d399', marginBottom: '20px' }}>Historical Comparison</div>
+                
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  <div style={{ backgroundColor: '#1e293b', padding: '14px', borderRadius: '8px', borderLeft: '4px solid #34d399' }}>
+                    <div style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase', marginBottom: '4px', fontWeight: 700 }}>Historical Move</div>
+                    <div style={{ color: '#f8fafc', fontSize: '16px', fontWeight: 700 }}>{currentPhase.historicMove}</div>
+                  </div>
+
+                  <div style={{ backgroundColor: '#1e293b', padding: '14px', borderRadius: '8px', borderLeft: '4px solid #fcd34d' }}>
+                    <div style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase', marginBottom: '4px', fontWeight: 700 }}>Tactical Idea</div>
+                    <div style={{ color: '#f8fafc', fontSize: '15px', lineHeight: '1.5' }}>{currentPhase.tacticalIdea}</div>
+                  </div>
+
+                  <div style={{ backgroundColor: '#1e293b', padding: '14px', borderRadius: '8px', borderLeft: '4px solid #60a5fa' }}>
+                    <div style={{ color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase', marginBottom: '4px', fontWeight: 700 }}>Your Reasoning</div>
+                    <div style={{ color: '#f8fafc', fontSize: '15px', lineHeight: '1.5', fontStyle: 'italic' }}>"{playerExplanation}"</div>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleContinueSimulation}
+                  style={{ marginTop: 'auto', paddingTop: '14px', paddingBottom: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', backgroundColor: '#3b82f6', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  <Play size={18} /> {phaseIndex + 1 < activeSession.phases.length ? 'Continue to Next Phase' : 'Resume Final Moves'}
+                </button>
+              </div>
+            )}
+
+            {/* Phase: Finished */}
+            {subState === 'finished' && (
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                <CheckCircle size={48} color="#34d399" style={{ marginBottom: '20px' }} />
+                <div style={{ fontSize: '20px', fontWeight: 700, color: '#f8fafc', marginBottom: '8px' }}>
+                  Simulation Complete
+                </div>
+                <div style={{ color: '#94a3b8', fontSize: '15px', textAlign: 'center', marginBottom: '32px' }}>
+                  You have successfully navigated through the critical moments of {activeSession.title}.
+                </div>
+                <button
+                  onClick={() => setSessionStarted(false)}
+                  style={{ width: '100%', padding: '14px', backgroundColor: '#334155', color: '#fff', border: '1px solid #475569', borderRadius: '8px', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  Return to Menu
+                </button>
+              </div>
+            )}
+
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  return sessionStarted ? renderSession() : renderSetup();
 }
 
 // --- 4D. Chess Library ---
 function LibraryTab({ onBack }) {
+  const [selectedCollection, setSelectedCollection] = useState('Famous Players');
+  const [libraryView, setLibraryView] = useState('catalog');
+
   const categories = [
     { title: 'Famous Players', icon: Users, desc: 'Profiles, styles, and signature openings of World Champions and elites.' },
     { title: 'Historic Games', icon: BookOpen, desc: 'The greatest matches, sacrifices, and tactical combinations ever played.' },
@@ -3358,7 +3835,82 @@ function LibraryTab({ onBack }) {
     { title: 'Time Controls', icon: Clock, desc: 'Understanding pacing across Classical, Rapid, Blitz, and Bullet.' }
   ];
 
-  return (
+  const libraryCollections = {
+    'Famous Players': [
+      { title: 'Magnus Carlsen', detail: 'Known for exceptional positional understanding, endgame skill, calculation, and practical decision-making.' },
+      { title: 'Garry Kasparov', detail: 'Famous for aggressive attacking play, deep calculation, strong opening preparation, and dynamic positions.' },
+      { title: 'Bobby Fischer', detail: 'Known for precise calculation, strong preparation, determination, and highly accurate play.' },
+      { title: 'José Raúl Capablanca', detail: 'Famous for elegant positional play, exceptional technique, and especially strong endgame ability.' },
+      { title: 'Anatoly Karpov', detail: 'Known for positional pressure, strategic planning, and gradually improving his position until weaknesses appear.' },
+      { title: 'Mikhail Tal', detail: 'Famous for creative attacking play, tactical combinations, and spectacular sacrifices.' },
+      { title: 'Viswanathan Anand', detail: 'Known for versatility, speed of calculation, strong preparation, and success across different styles of chess.' },
+      { title: 'Vladimir Kramnik', detail: 'Known for deep strategic understanding, strong positional play, and excellent defensive technique.' },
+      { title: 'Paul Morphy', detail: 'Famous for rapid development, tactical attacks, open positions, and highly efficient piece coordination.' },
+      { title: 'Judit Polgár', detail: 'Famous for aggressive attacking play, tactical ability, and competing successfully at the highest level of chess.' }
+    ],
+    'Historic Games': [
+      { title: 'Morphy vs. Duke of Brunswick & Count Isouard (1858)', detail: 'The Opera Game; famous for rapid development and a brilliant attacking combination.' },
+      { title: 'Anderssen vs. Kieseritzky (1851)', detail: 'The Immortal Game; famous for spectacular sacrifices and a powerful attack.' },
+      { title: 'Anderssen vs. Dufresne (1852)', detail: 'The Evergreen Game; known for creative tactics and a memorable checkmate.' },
+      { title: 'Fischer vs. Byrne (1956)', detail: 'The Game of the Century; Bobby Fischer produced a remarkable tactical victory as a teenager.' },
+      { title: 'Fischer vs. Spassky (1972), Game 6', detail: 'Famous for Fischer\'s deep positional play during the World Championship match.' },
+      { title: 'Karpov vs. Kasparov (1985), Game 16', detail: 'A famous World Championship battle showcasing strategic pressure and tactical precision.' },
+      { title: 'Kasparov vs. Topalov (1999)', detail: 'Famous for one of Kasparov\'s most spectacular attacking combinations.' },
+      { title: 'Kasparov vs. Deep Blue (1997), Game 6', detail: 'Historic as the final game of the famous match between Kasparov and IBM\'s chess computer.' },
+      { title: 'Carlsen vs. Karjakin (2016), Game 10', detail: 'A dramatic World Championship game featuring complex calculation and attacking play.' },
+      { title: 'Carlsen vs. Nepomniachtchi (2021), Game 6', detail: 'Famous for its extraordinary length and complex endgame, becoming a landmark World Championship game.' }
+    ],
+    'Chess History': [
+      { title: 'Early Chess', detail: 'The origins of chess and the development of early chess-like games in India, Persia, and the Islamic world.' },
+      { title: 'Medieval Chess', detail: 'Chess spread across Europe and gradually developed new rules and playing traditions.' },
+      { title: 'Romantic Era', detail: 'Known for aggressive attacks, sacrifices, and brilliant combinations.' },
+      { title: 'Classical Era', detail: 'Players emphasized strategic principles, positional understanding, and systematic analysis.' },
+      { title: 'Soviet Chess Era', detail: 'Soviet players dominated international chess and developed highly systematic training and preparation.' },
+      { title: 'Modern Chess Era', detail: 'Professional chess became increasingly competitive, with stronger theory, preparation, and international tournaments.' },
+      { title: 'Computer Chess Era', detail: 'Chess engines transformed opening preparation, analysis, and training.' },
+      { title: 'AI Era', detail: 'Modern AI systems introduced new approaches to chess analysis, strategy, and machine learning.' }
+    ],
+    'Opening Theory': [
+      { title: 'Italian Game', detail: 'Develops pieces quickly and targets the center and f7-square.' },
+      { title: 'Ruy Lopez', detail: 'Develops the bishop actively and puts pressure on Black\'s kingside.' },
+      { title: 'Scotch Game', detail: 'Opens the center early for active piece play.' },
+      { title: 'Four Knights Game', detail: 'Focuses on simple development and central control.' },
+      { title: 'Queen\'s Gambit', detail: 'Offers a pawn to gain strong control of the center.' },
+      { title: 'London System', detail: 'Uses a solid and consistent setup for White.' },
+      { title: 'Sicilian Defense', detail: 'Black responds to 1.e4 with ...c5 to create an unbalanced game.' },
+      { title: 'French Defense', detail: 'Black plays ...e6 and challenges White\'s central pawns.' },
+      { title: 'Caro-Kann Defense', detail: 'Black plays ...c6 to build a solid position and prepare ...d5.' },
+      { title: 'King\'s Indian Defense', detail: 'Black allows White to occupy the center before attacking it from the sides.' }
+    ],
+    'Chess Variants': [
+      { title: 'Chess960', detail: 'The starting pieces are randomly arranged, reducing memorized opening theory.' },
+      { title: 'Crazyhouse', detail: 'Captured pieces can be returned to the board and used by the capturing player.' },
+      { title: 'Three-Check', detail: 'The first player to give the check three times wins.' },
+      { title: 'Bughouse', detail: 'Two teams play on two boards and pass captured pieces to their teammates.' },
+      { title: 'Atomic Chess', detail: 'Captures cause an explosion that can remove nearby pieces.' },
+      { title: 'King of the Hill', detail: 'Bring your king to the center of the board to win.' },
+      { title: 'Antichess', detail: 'The goal is to get rid of all your pieces.' },
+      { title: 'Horde Chess', detail: 'One player has a large group of pawns against a normal chess army.' },
+      { title: 'Racing Kings', detail: 'Players race their kings to the opposite side of the board.' },
+      { title: 'Four-Player Chess', detail: 'Four players compete on an expanded board, individually or in teams.' }
+    ],
+    'Time Controls': [
+      { title: 'Classical', detail: 'Long games with plenty of time for deep calculation and strategy.' },
+      { title: 'Rapid', detail: 'Faster games that balance calculation with quick decision-making.' },
+      { title: 'Blitz', detail: 'Very fast games that emphasize speed and instinct.' },
+      { title: 'Bullet', detail: 'Extremely fast games where quick reactions are essential.' },
+      { title: 'Daily Chess', detail: 'Players have much longer time limits, often hours or days per move.' },
+      { title: 'Increment', detail: 'Extra time is added to a player\'s clock after each move.' },
+      { title: 'Sudden Death', detail: 'The game ends when a player runs out of their allotted time.' },
+      { title: 'Time Handicap', detail: 'Players receive different amounts of time based on their skill or chosen settings.' },
+      { title: 'Custom Time Control', detail: 'Players choose their own starting time and increment.' },
+      { title: 'No Time Limit', detail: 'Players can take as much time as they need to make each move.' }
+    ]
+  };
+
+  const activeCollection = libraryCollections[selectedCollection] || libraryCollections['Famous Players'];
+
+  const renderCatalogPage = () => (
     <div style={{ width: '100%', height: '100vh', maxHeight: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <div style={styles.header}>
         <button onClick={onBack} style={styles.backButton}>
@@ -3368,7 +3920,7 @@ function LibraryTab({ onBack }) {
       </div>
 
       <div style={{ flex: 1, maxWidth: '1140px', width: '100%', margin: '0 auto', padding: '14px 24px 20px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '14px', overflow: 'hidden' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
           <div>
             <h2 style={{ fontSize: '28px', margin: '0 0 8px 0' }}>Explore the Game</h2>
             <p style={{ color: '#94a3b8', margin: 0, fontSize: '15px' }}>Discover history, variants, and legendary grandmasters.</p>
@@ -3378,9 +3930,32 @@ function LibraryTab({ onBack }) {
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '14px', flex: 1 }}>
+        {/* Added responsive auto-fit grid and internal scrolling so the boxes never get cut vertically or horizontally */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '14px', flex: 1, overflowY: 'auto', paddingBottom: '10px' }}>
           {categories.map((cat, idx) => (
-            <div key={idx} style={{ padding: '18px', backgroundColor: 'rgba(30, 41, 59, 0.9)', backdropFilter: 'blur(8px)', borderRadius: '16px', border: '1px solid #334155', display: 'flex', flexDirection: 'column', gap: '12px', cursor: 'pointer', minHeight: 0 }}>
+            <button
+              key={idx}
+              type="button"
+              onClick={() => {
+                setSelectedCollection(cat.title);
+                setLibraryView('collection');
+              }}
+              style={{
+                padding: '18px',
+                backgroundColor: 'rgba(30, 41, 59, 0.9)',
+                backdropFilter: 'blur(8px)',
+                borderRadius: '16px',
+                border: '1px solid #334155',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '12px',
+                cursor: 'pointer',
+                minHeight: 'min-content', // Ensures the box stretches to fit its content
+                boxSizing: 'border-box', // Prevents padding from breaking width/height
+                textAlign: 'left',
+                color: '#f8fafc'
+              }}
+            >
               <div style={{ padding: '14px', backgroundColor: '#1e293b', width: 'fit-content', borderRadius: '12px' }}>
                 <cat.icon size={28} color="#60a5fa" />
               </div>
@@ -3391,12 +3966,43 @@ function LibraryTab({ onBack }) {
               <div style={{ marginTop: 'auto', paddingTop: '12px', borderTop: '1px solid #334155', color: '#60a5fa', fontWeight: 'bold', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '4px' }}>
                 Explore Collection <ChevronRight size={16} />
               </div>
-            </div>
+            </button>
           ))}
         </div>
       </div>
     </div>
   );
+
+  const renderCollectionPage = () => (
+    <div style={{ width: '100%', height: '100vh', maxHeight: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={styles.header}>
+        <button
+          onClick={() => setLibraryView('catalog')}
+          style={styles.backButton}
+        >
+          <ArrowLeft size={20} /> Back to Library
+        </button>
+        <h2 style={styles.dashHeaderTitle}>{selectedCollection}</h2>
+      </div>
+
+      <div style={{ flex: 1, maxWidth: '1100px', width: '100%', margin: '0 auto', padding: '20px 24px 24px', boxSizing: 'border-box', overflow: 'hidden' }}>
+        {/* Added boxSizing: 'border-box' so the 18px padding doesn't push the bottom border out of view */}
+        <div style={{ backgroundColor: 'rgba(15, 23, 42, 0.9)', border: '1px solid #334155', borderRadius: '16px', padding: '18px 20px', height: '100%', boxSizing: 'border-box', overflowY: 'auto' }}>
+          <div style={{ fontSize: '28px', fontWeight: 700, marginBottom: '14px', color: '#f8fafc' }}>{selectedCollection}</div>
+          <div style={{ display: 'grid', gap: '12px' }}>
+            {activeCollection.map((item) => (
+              <div key={item.title} style={{ padding: '12px 14px', borderRadius: '12px', backgroundColor: '#111827', border: '1px solid #1f2937', boxSizing: 'border-box' }}>
+                <div style={{ color: '#f8fafc', fontWeight: 700, fontSize: '15px', marginBottom: '6px' }}>{item.title}</div>
+                <div style={{ color: '#cbd5e1', fontSize: '13px', lineHeight: '1.55' }}>{item.detail}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  return libraryView === 'collection' ? renderCollectionPage() : renderCatalogPage();
 }
 
 // --- 4E. My Board (Settings) ---
@@ -3884,7 +4490,7 @@ export default function ChessSim() {
       case 'play': 
         return <FreestyleChessTab onBack={() => setCurrentView('dashboard')} boardTheme={boardTheme} experienceSettings={experienceSettings} onRecordGame={handleRecordGame} currentUser={currentUser} />;
       case 'puzzles': 
-        return <PuzzlesTab onBack={() => setCurrentView('dashboard')} playerRecords={playerRecords} setPlayerRecords={setPlayerRecords} />;
+        return <PuzzlesView onBack={() => setCurrentView('dashboard')} playerRecords={playerRecords} setPlayerRecords={setPlayerRecords} />;
       case 'analysis': 
         return <GuessAndExplainTab onBack={() => setCurrentView('dashboard')} />;
       case 'history': 

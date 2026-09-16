@@ -1,0 +1,120 @@
+{
+  "name": "lichess-chess",
+  "displayName": "Lichess Chess",
+  "description": "Lichess-powered puzzles, Stockfish AI, online play, live games, and authentication inside VS Code.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.88.0"
+  },
+  "categories": [
+    "Other",
+    "Education",
+    "Machine Learning"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "lichess.openSidebar",
+        "title": "Lichess: Open Sidebar"
+      },
+      {
+        "command": "lichess.puzzleArchive",
+        "title": "Lichess: Puzzle Archive"
+      },
+      {
+        "command": "lichess.mateLessons",
+        "title": "Lichess: Mate Lessons"
+      },
+      {
+        "command": "lichess.tacticalLessons",
+        "title": "Lichess: Tactical Lessons"
+      },
+      {
+        "command": "lichess.dailyPuzzle",
+        "title": "Lichess: Daily Puzzle"
+      },
+      {
+        "command": "lichess.randomPuzzle",
+        "title": "Lichess: Random Puzzle"
+      },
+      {
+        "command": "lichess.puzzleHint",
+        "title": "Lichess: Show Puzzle Hint"
+      },
+      {
+        "command": "lichess.puzzleSolution",
+        "title": "Lichess: Show Puzzle Solution"
+      },
+      {
+        "command": "lichess.playAi",
+        "title": "Lichess: Play vs AI"
+      },
+      {
+        "command": "lichess.playOnline",
+        "title": "Lichess: Play Online"
+      },
+      {
+        "command": "lichess.liveGames",
+        "title": "Lichess: Open Live Games"
+      },
+      {
+        "command": "lichess.authenticate",
+        "title": "Lichess: Authenticate"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "lichess",
+          "title": "Lichess",
+          "icon": "$(beaker)"
+        }
+      ]
+    },
+    "views": {
+      "lichess": [
+        {
+          "id": "lichessSidebar",
+          "name": "Lichess",
+          "type": "webview",
+          "icon": "$(beaker)"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Lichess Chess",
+      "properties": {
+        "lichess.token": {
+          "type": "string",
+          "default": "",
+          "description": "Optional Lichess personal access token for authenticated API requests."
+        },
+        "lichess.aiLevel": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 8,
+          "description": "Stockfish strength level for AI play (1-8)."
+        },
+        "lichess.timeControl": {
+          "type": "string",
+          "default": "blitz",
+          "enum": ["bullet", "blitz", "rapid", "classical"],
+          "description": "Default time control for AI and online challenges."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "@types/vscode": "^1.89.0",
+    "typescript": "^5.5.3"
+  }
+}
