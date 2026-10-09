@@ -10,3 +10,9 @@ dist/
 
 # Local nested repo, not part of deploy
 /prompts.chat/
+.stockfish/
+node_modules/
+dist/
+build/
+*.tar.gz
+.DS_Store
