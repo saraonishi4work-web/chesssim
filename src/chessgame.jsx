@@ -2136,7 +2136,7 @@ function ActiveBoardSection({
                 <ChevronRight size={16} /> Undo Takeback
               </button>
 
-              {gameMode !== 'pass-play' && (
+              {gameMode !== 'pass-play' && gameMode !== 'friend' && (
                 <button onClick={() => setBoardOrientation((prev) => (prev === 'white' ? 'black' : 'white'))} style={styles.actionButton}>
                   <Repeat size={16} /> Flip
                 </button>
@@ -2441,21 +2441,33 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
       const effectiveAsHost = Boolean(
         asHost && (!existing || !existingHostId || isCurrentUserHost || (!existingGuestId && !isCurrentUserGuest))
       ) || (!existing && asHost);
+      const normalizedSelectedColor = selectedColor === 'black' ? 'black' : 'white';
+      const normalizedHostColor = (existing?.hostColor || existing?.hostRole || 'white') === 'black' ? 'black' : 'white';
+      const normalizedGuestColor = (existing?.guestColor || existing?.guestRole || 'black') === 'white' ? 'white' : 'black';
 
       const resolvedHostColor = effectiveAsHost ? selectedColor : (existing?.hostColor || 'white');
       const resolvedGuestColor = effectiveAsHost ? (selectedColor === 'white' ? 'black' : 'white') : (existing?.guestColor || 'black');
 
-      if (existing && !effectiveAsHost && typeof selectedColor === 'string' && selectedColor === existing?.hostColor) {
+      const hostColorTakenByOther = Boolean(
+        existing && !effectiveAsHost && existingHostId && existingHostId !== currentUserId && normalizedSelectedColor === normalizedHostColor
+      );
+      const guestColorTakenByOther = Boolean(
+        existing && effectiveAsHost && existingGuestId && existingGuestId !== currentUserId && normalizedSelectedColor === normalizedGuestColor
+      );
+
+      if (hostColorTakenByOther) {
         setFriendSetup((prev) => ({ ...prev, joinError: 'That color is already taken by the other player.' }));
         setFriendConnectionStatus('idle');
         return false;
       }
 
-      if (existing && effectiveAsHost && existing?.guestColor && selectedColor === existing.guestColor) {
+      if (guestColorTakenByOther) {
         setFriendSetup((prev) => ({ ...prev, joinError: 'That color is already taken by the other player.' }));
         setFriendConnectionStatus('idle');
         return false;
       }
+
+      setFriendSetup((prev) => (prev.joinError ? { ...prev, joinError: '' } : prev));
 
       const nextData = {
         roomId: normalizedId,
@@ -2516,9 +2528,9 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
   };
 
   const syncFriendState = async (nextGame, nextHistory = moveHistory, nextStatus = gameStatus) => {
-    const invitedUserId = normalizeEmail(friendSetup.inviteCode || friendSetup.joinCode || '');
-    const currentUserKey = normalizeEmail(currentUser?.email || '');
-    const roomId = currentUserKey && invitedUserId ? buildFriendRoomId(currentUserKey, invitedUserId) : invitedUserId;
+    const activeRoomRef = firebaseRoomRef.current;
+    const fallbackRoomId = cleanFriendCode(friendSetup.inviteCode || friendSetup.joinCode || '').toUpperCase();
+    const roomId = activeRoomRef?.key || fallbackRoomId;
     const payload = {
       fen: nextGame?.fen?.() || new Chess().fen(),
       moveHistory: Array.isArray(nextHistory) ? nextHistory : [],
@@ -2526,7 +2538,8 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
     };
 
     if (setupConfig.opponent === 'Play with Friends' && firebaseDb && roomId) {
-      const roomRef = ref(firebaseDb, `friend_games/${roomId}`);
+      const roomRef = activeRoomRef || ref(firebaseDb, `friend_games/${roomId}`);
+      if (!activeRoomRef) firebaseRoomRef.current = roomRef;
       try {
         const snapshot = await get(roomRef);
         const roomData = snapshot.exists() ? snapshot.val() : {};
@@ -2736,14 +2749,6 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
   );
 
   if (view === 'active') {
-    const nextOrientation = setupConfig.opponent === 'Play with Friends' && friendSetup.joinCode
-      ? 'black'
-      : 'white';
-
-    if (boardOrientation !== nextOrientation) {
-      setBoardOrientation(nextOrientation);
-    }
-
     return (
       <ActiveBoardSection
         setCurrentView={setView}
