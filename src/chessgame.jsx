@@ -1112,6 +1112,7 @@ class ErrorBoundary extends React.Component {
 // ==========================================
 function ActiveBoardSection({
   setCurrentView,
+  onExitMatch,
   game,
   setGame,
   gameStatus,
@@ -2026,7 +2027,13 @@ function ActiveBoardSection({
   return (
     <div style={{ width: '100%' }}>
       <div style={styles.header}>
-        <button onClick={() => setCurrentView('setup')} style={styles.backButton}>
+        <button onClick={() => {
+          if (typeof onExitMatch === 'function') {
+            onExitMatch();
+            return;
+          }
+          setCurrentView('setup');
+        }} style={styles.backButton}>
           <ArrowLeft size={20} /> Match Setup
         </button>
         <h2 style={styles.dashHeaderTitle}>Freestyle Match</h2>
@@ -2288,6 +2295,7 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
   const firebaseRoomRef = useRef(null);
   const [friendConnectionStatus, setFriendConnectionStatus] = useState('idle');
   const [friendRole, setFriendRole] = useState('white');
+  const [friendIsHost, setFriendIsHost] = useState(false);
   const [friendColorChoice, setFriendColorChoice] = useState('white');
   const [friendColorPromptVisible, setFriendColorPromptVisible] = useState(false);
   const [friendJoinMode, setFriendJoinMode] = useState(false);
@@ -2369,6 +2377,41 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
   const [boardOrientation, setBoardOrientation] = useState('white');
   const [moveHistory, setMoveHistory] = useState([]);
 
+  const sanitizeAssistModes = (assistModes) => {
+    const source = assistModes && typeof assistModes === 'object' ? assistModes : {};
+    return {
+      legalMoves: Boolean(source.legalMoves),
+      checkWarnings: Boolean(source.checkWarnings),
+      blunderWarnings: Boolean(source.blunderWarnings),
+      cctPlusReminder: Boolean(source.cctPlusReminder),
+      threatExplanation: Boolean(source.threatExplanation),
+      openingChecklist: Boolean(source.openingChecklist),
+    };
+  };
+
+  const applyIncomingFriendSetup = (incomingSetup) => {
+    if (!incomingSetup || typeof incomingSetup !== 'object') return;
+    setSetupConfig((prev) => {
+      const nextVariant = typeof incomingSetup.variant === 'string' ? incomingSetup.variant : prev.variant;
+      const nextTimeControl = typeof incomingSetup.timeControl === 'string' ? incomingSetup.timeControl : prev.timeControl;
+      const nextAssistModes = sanitizeAssistModes(incomingSetup.assistModes);
+      const prevAssistModes = sanitizeAssistModes(prev.assistModes);
+
+      const sameAssist = Object.keys(nextAssistModes).every((key) => nextAssistModes[key] === prevAssistModes[key]);
+      if (prev.opponent === 'Play with Friends' && prev.variant === nextVariant && prev.timeControl === nextTimeControl && sameAssist) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        opponent: 'Play with Friends',
+        variant: nextVariant,
+        timeControl: nextTimeControl,
+        assistModes: nextAssistModes,
+      };
+    });
+  };
+
   useEffect(() => {
     try {
       localStorage.setItem('chesssim_setup_config', JSON.stringify(setupConfig));
@@ -2417,6 +2460,7 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
       firebaseRoomRef.current = null;
     }
     setFriendConnectionStatus('idle');
+    setFriendIsHost(false);
   };
 
   useEffect(() => () => closeFriendConnection(), []);
@@ -2482,6 +2526,11 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
         guestColor: resolvedGuestColor,
         hostReady: effectiveAsHost ? true : Boolean(existing?.hostReady),
         guestReady: effectiveAsHost ? Boolean(existing?.guestReady) : true,
+        setupConfig: {
+          variant: effectiveAsHost ? setupConfig.variant : (existing?.setupConfig?.variant || setupConfig.variant),
+          timeControl: effectiveAsHost ? setupConfig.timeControl : (existing?.setupConfig?.timeControl || setupConfig.timeControl),
+          assistModes: effectiveAsHost ? sanitizeAssistModes(setupConfig.assistModes) : sanitizeAssistModes(existing?.setupConfig?.assistModes || setupConfig.assistModes),
+        },
         state: {
           fen: existing?.state?.fen || new Chess().fen(),
           moveHistory: Array.isArray(existing?.state?.moveHistory) ? existing.state.moveHistory : [],
@@ -2491,6 +2540,7 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
 
       await set(roomRef, nextData);
       const myColor = resolveFriendColorForCurrentUser(nextData, currentUserId, selectedColor);
+      setFriendIsHost(Boolean(currentUserId && nextData.hostUserId && nextData.hostUserId === currentUserId));
       setFriendRole(myColor);
       setBoardOrientation(myColor);
       firebaseRoomRef.current = roomRef;
@@ -2498,12 +2548,23 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
 
       onValue(roomRef, (snapshotValue) => {
         const data = snapshotValue.val();
-        if (!data || !data.state) return;
+        if (!data) return;
+
+        if (data.status === 'cancelled') {
+          setFriendSetup((prev) => ({ ...prev, joinError: 'Match cancelled. Host can set up the next game.' }));
+          setView('setup');
+          closeFriendConnection();
+          return;
+        }
+
+        if (!data.state) return;
         const roomMyColor = resolveFriendColorForCurrentUser(data, currentUserId, selectedColor);
+        setFriendIsHost(Boolean(currentUserId && data.hostUserId && data.hostUserId === currentUserId));
         const shouldBeConnected = Boolean(data.hostReady && data.guestReady);
         setFriendConnectionStatus(shouldBeConnected ? 'connected' : effectiveAsHost ? 'waiting' : 'connecting');
         setFriendRole(roomMyColor);
         setBoardOrientation(roomMyColor);
+        applyIncomingFriendSetup(data.setupConfig);
         handleIncomingFriendState(data.state);
       });
 
@@ -2556,6 +2617,11 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
           guestColor: roomData?.guestColor || roomData?.guestRole || 'black',
           hostReady: roomData?.hostReady ?? true,
           guestReady: roomData?.guestReady ?? true,
+          setupConfig: roomData?.setupConfig || {
+            variant: setupConfig.variant,
+            timeControl: setupConfig.timeControl,
+            assistModes: sanitizeAssistModes(setupConfig.assistModes),
+          },
           state: payload,
         };
 
@@ -2570,6 +2636,7 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
 
         await set(roomRef, nextRoomData);
         const myColor = resolveFriendColorForCurrentUser(nextRoomData, getCurrentUserKey(currentUser) || null, friendColorChoice || 'white');
+        setFriendIsHost(Boolean(getCurrentUserKey(currentUser) && nextRoomData.hostUserId && nextRoomData.hostUserId === getCurrentUserKey(currentUser)));
         setFriendRole(myColor);
         setBoardOrientation(myColor);
       } catch (error) {
@@ -2642,6 +2709,7 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
 
   const startFriendPeer = (peerId, asHost = false) => {
     closeFriendConnection();
+    setFriendIsHost(Boolean(asHost));
     const peer = new Peer(peerId, {
       host: '0.peerjs.com',
       port: 443,
@@ -2664,6 +2732,10 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
       conn.on('data', (data) => {
         if (data?.type === 'game-state') {
           handleIncomingFriendState(data.payload);
+        } else if (data?.type === 'match-cancelled') {
+          setFriendSetup((prev) => ({ ...prev, joinError: 'Match cancelled. Host can set up the next game.' }));
+          setView('setup');
+          closeFriendConnection();
         }
       });
       conn.on('open', () => {
@@ -2701,6 +2773,10 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
       conn.on('data', (data) => {
         if (data?.type === 'game-state') {
           handleIncomingFriendState(data.payload);
+        } else if (data?.type === 'match-cancelled') {
+          setFriendSetup((prev) => ({ ...prev, joinError: 'Match cancelled. Host can set up the next game.' }));
+          setView('setup');
+          closeFriendConnection();
         }
       });
       conn.on('close', () => {
@@ -2717,13 +2793,96 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
   }, [currentUser, setupConfig.opponent]);
 
   const toggleAssist = (key) => {
+    if (setupConfig.opponent === 'Play with Friends' && friendConnectionStatus !== 'idle' && !friendIsHost) {
+      return;
+    }
     setSetupConfig(prev => ({
       ...prev, 
       assistModes: { ...prev.assistModes, [key]: !prev.assistModes[key] }
     }));
   };
 
+  const cancelActiveFriendMatch = async () => {
+    if (activeGameMode !== 'friend') {
+      setView('setup');
+      return;
+    }
+
+    const roomRef = firebaseRoomRef.current;
+    const currentUserId = getCurrentUserKey(currentUser) || '';
+
+    if (roomRef && firebaseDb) {
+      try {
+        const snapshot = await get(roomRef);
+        const roomData = snapshot.exists() ? snapshot.val() : {};
+        await set(roomRef, {
+          ...roomData,
+          status: 'cancelled',
+          cancelledAt: Date.now(),
+          cancelledBy: currentUserId || 'unknown',
+          hostReady: false,
+          guestReady: false,
+        });
+      } catch (error) {
+        console.error('Failed to cancel friend match', error);
+      }
+    } else if (friendConnRef.current && friendConnRef.current.open) {
+      try {
+        friendConnRef.current.send({ type: 'match-cancelled' });
+      } catch (e) {
+        console.error('Failed to notify peer match cancellation', e);
+      }
+    }
+
+    setFriendSetup((prev) => ({ ...prev, joinError: 'Match cancelled. Host can set up the next game.' }));
+    closeFriendConnection();
+    setView('setup');
+  };
+
+  useEffect(() => {
+    if (setupConfig.opponent !== 'Play with Friends') return;
+    if (!friendIsHost || !firebaseDb || !firebaseRoomRef.current) return;
+    if (friendConnectionStatus === 'idle' || friendConnectionStatus === 'error') return;
+
+    let cancelled = false;
+    const persistHostSetup = async () => {
+      try {
+        const roomRef = firebaseRoomRef.current;
+        if (!roomRef) return;
+        const snapshot = await get(roomRef);
+        if (cancelled) return;
+        const roomData = snapshot.exists() ? snapshot.val() : {};
+        const nextRoomData = {
+          ...roomData,
+          setupConfig: {
+            variant: setupConfig.variant,
+            timeControl: setupConfig.timeControl,
+            assistModes: sanitizeAssistModes(setupConfig.assistModes),
+          },
+          updatedAt: Date.now(),
+        };
+        await set(roomRef, nextRoomData);
+      } catch (error) {
+        console.error('Failed to sync host setup config', error);
+      }
+    };
+
+    persistHostSetup();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    setupConfig.opponent,
+    setupConfig.variant,
+    setupConfig.timeControl,
+    setupConfig.assistModes,
+    friendIsHost,
+    friendConnectionStatus,
+    firebaseDb,
+  ]);
+
   const availableModes = currentUser ? ['Play vs AI', 'Pass & Play', 'Play with Friends'] : ['Play vs AI', 'Pass & Play'];
+  const friendSetupLockedForGuest = setupConfig.opponent === 'Play with Friends' && friendConnectionStatus !== 'idle' && !friendIsHost;
   const isStandardVariant = setupConfig.variant === 'Standard';
   const activeGameMode = setupConfig.opponent === 'Play vs AI' ? 'ai' : setupConfig.opponent === 'Pass & Play' ? 'pass-play' : 'friend';
   const activeFriendPasskey = setupConfig.opponent === 'Play with Friends'
@@ -2752,6 +2911,7 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
     return (
       <ActiveBoardSection
         setCurrentView={setView}
+        onExitMatch={cancelActiveFriendMatch}
         game={game}
         setGame={setGame}
         gameStatus={gameStatus}
@@ -2819,6 +2979,7 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
               <select 
                 value={setupConfig.variant} 
                 onChange={(e) => setSetupConfig({...setupConfig, variant: e.target.value})}
+                disabled={friendSetupLockedForGuest}
                 style={{ width: '100%', padding: '6px 10px', backgroundColor: '#1e293b', color: 'white', border: '1px solid #334155', borderRadius: '6px', fontSize: '13px', cursor: 'pointer' }}
               >
                 <option>Standard</option>
@@ -2838,7 +2999,7 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
                 Time Control {!isStandardVariant && '(Standard Variant Only)'}
               </label>
               <select 
-                disabled={!isStandardVariant}
+                disabled={!isStandardVariant || friendSetupLockedForGuest}
                 value={setupConfig.timeControl} 
                 onChange={(e) => setSetupConfig({...setupConfig, timeControl: e.target.value})}
                 style={{ 
@@ -2882,7 +3043,11 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
             {availableModes.map(mode => (
               <button
                 key={mode}
-                onClick={() => setSetupConfig({ ...setupConfig, opponent: mode })}
+                onClick={() => {
+                  if (friendSetupLockedForGuest) return;
+                  setSetupConfig({ ...setupConfig, opponent: mode });
+                }}
+                disabled={friendSetupLockedForGuest}
                 style={{
                   ...styles.modeButton,
                   flex: 1,
@@ -3182,24 +3347,29 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
           </h2>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
             <label style={{ ...styles.checkboxLabel, padding: '6px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: '#ffffff' }}>
-              <input type="checkbox" checked={setupConfig.assistModes.legalMoves} onChange={() => toggleAssist('legalMoves')} /> Legal Move Guidance
+              <input type="checkbox" checked={setupConfig.assistModes.legalMoves} onChange={() => toggleAssist('legalMoves')} disabled={friendSetupLockedForGuest} /> Legal Move Guidance
             </label>
             <label style={{ ...styles.checkboxLabel, padding: '6px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: '#ffffff' }}>
-              <input type="checkbox" checked={setupConfig.assistModes.cctPlusReminder} onChange={() => toggleAssist('cctPlusReminder')} /> CCT+ Reminder
+              <input type="checkbox" checked={setupConfig.assistModes.cctPlusReminder} onChange={() => toggleAssist('cctPlusReminder')} disabled={friendSetupLockedForGuest} /> CCT+ Reminder
             </label>
             <label style={{ ...styles.checkboxLabel, padding: '6px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: '#ffffff' }}>
-              <input type="checkbox" checked={setupConfig.assistModes.openingChecklist} onChange={() => toggleAssist('openingChecklist')} /> Opening Concept Checklist
+              <input type="checkbox" checked={setupConfig.assistModes.openingChecklist} onChange={() => toggleAssist('openingChecklist')} disabled={friendSetupLockedForGuest} /> Opening Concept Checklist
             </label>
             <label style={{ ...styles.checkboxLabel, padding: '6px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: '#ffffff' }}>
-              <input type="checkbox" checked={setupConfig.assistModes.threatExplanation} onChange={() => toggleAssist('threatExplanation')} /> Threat Warnings
+              <input type="checkbox" checked={setupConfig.assistModes.threatExplanation} onChange={() => toggleAssist('threatExplanation')} disabled={friendSetupLockedForGuest} /> Threat Warnings
             </label>
             <label style={{ ...styles.checkboxLabel, padding: '6px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: '#ffffff' }}>
-              <input type="checkbox" checked={setupConfig.assistModes.checkWarnings} onChange={() => toggleAssist('checkWarnings')} /> Check Warnings
+              <input type="checkbox" checked={setupConfig.assistModes.checkWarnings} onChange={() => toggleAssist('checkWarnings')} disabled={friendSetupLockedForGuest} /> Check Warnings
             </label>
             <label style={{ ...styles.checkboxLabel, padding: '6px 8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: '#ffffff' }}>
-              <input type="checkbox" checked={setupConfig.assistModes.blunderWarnings} onChange={() => toggleAssist('blunderWarnings')} /> Blunder Warnings
+              <input type="checkbox" checked={setupConfig.assistModes.blunderWarnings} onChange={() => toggleAssist('blunderWarnings')} disabled={friendSetupLockedForGuest} /> Blunder Warnings
             </label>
           </div>
+          {friendSetupLockedForGuest && (
+            <div style={{ marginTop: '10px', color: '#fcd34d', fontSize: '12px', backgroundColor: '#181e2f', border: '1px solid #374151', borderRadius: '8px', padding: '8px 10px' }}>
+              Match customization is controlled by the host.
+            </div>
+          )}
         </div>
 
         <div style={{ position: 'sticky', bottom: 0, marginTop: '12px', paddingTop: '10px', background: 'linear-gradient(180deg, rgba(15, 23, 42, 0) 0%, rgba(15, 23, 42, 0.75) 35%, rgba(15, 23, 42, 1) 100%)', display: 'flex', justifyContent: 'center', zIndex: 2 }}>
