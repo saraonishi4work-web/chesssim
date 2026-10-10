@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Peer from 'peerjs';
 import { createUserWithEmailAndPassword, GoogleAuthProvider, signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile } from 'firebase/auth';
-import { ref, get, set, onValue, off } from 'firebase/database';
+import { ref, get, set, update, onValue, off } from 'firebase/database';
 import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import { auth, db } from './firebase';
@@ -2493,10 +2493,10 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
       const resolvedGuestColor = effectiveAsHost ? (selectedColor === 'white' ? 'black' : 'white') : (existing?.guestColor || 'black');
 
       const hostColorTakenByOther = Boolean(
-        existing && !effectiveAsHost && existingHostId && existingHostId !== currentUserId && normalizedSelectedColor === normalizedHostColor
+        existing && existingHostId && existingHostId !== currentUserId && normalizedSelectedColor === normalizedHostColor
       );
       const guestColorTakenByOther = Boolean(
-        existing && effectiveAsHost && existingGuestId && existingGuestId !== currentUserId && normalizedSelectedColor === normalizedGuestColor
+        existing && existingGuestId && existingGuestId !== currentUserId && normalizedSelectedColor === normalizedGuestColor
       );
 
       if (hostColorTakenByOther) {
@@ -2538,13 +2538,13 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
         },
       };
 
-      await set(roomRef, nextData);
+      await update(roomRef, nextData);
       const myColor = resolveFriendColorForCurrentUser(nextData, currentUserId, selectedColor);
       setFriendIsHost(Boolean(currentUserId && nextData.hostUserId && nextData.hostUserId === currentUserId));
       setFriendRole(myColor);
       setBoardOrientation(myColor);
       firebaseRoomRef.current = roomRef;
-      setFriendConnectionStatus(effectiveAsHost ? 'waiting' : 'connecting');
+      setFriendConnectionStatus('waiting');
 
       onValue(roomRef, (snapshotValue) => {
         const data = snapshotValue.val();
@@ -2561,7 +2561,7 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
         const roomMyColor = resolveFriendColorForCurrentUser(data, currentUserId, selectedColor);
         setFriendIsHost(Boolean(currentUserId && data.hostUserId && data.hostUserId === currentUserId));
         const shouldBeConnected = Boolean(data.hostReady && data.guestReady);
-        setFriendConnectionStatus(shouldBeConnected ? 'connected' : effectiveAsHost ? 'waiting' : 'connecting');
+        setFriendConnectionStatus(shouldBeConnected ? 'connected' : 'waiting');
         setFriendRole(roomMyColor);
         setBoardOrientation(roomMyColor);
         applyIncomingFriendSetup(data.setupConfig);
@@ -2604,12 +2604,12 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
       try {
         const snapshot = await get(roomRef);
         const roomData = snapshot.exists() ? snapshot.val() : {};
-        const nextRoomData = {
-          ...roomData,
+        const currentUserId = getCurrentUserKey(currentUser) || null;
+        const nextRoomPatch = {
           roomId,
           status: 'active',
           updatedAt: Date.now(),
-          hostUserId: roomData?.hostUserId || getCurrentUserKey(currentUser) || 'host',
+          hostUserId: roomData?.hostUserId || currentUserId || 'host',
           guestUserId: roomData?.guestUserId || null,
           hostRole: roomData?.hostRole || roomData?.hostColor || 'white',
           guestRole: roomData?.guestRole || roomData?.guestColor || 'black',
@@ -2617,26 +2617,34 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
           guestColor: roomData?.guestColor || roomData?.guestRole || 'black',
           hostReady: roomData?.hostReady ?? true,
           guestReady: roomData?.guestReady ?? true,
-          setupConfig: roomData?.setupConfig || {
-            variant: setupConfig.variant,
-            timeControl: setupConfig.timeControl,
-            assistModes: sanitizeAssistModes(setupConfig.assistModes),
-          },
           state: payload,
         };
 
-        if (getCurrentUserKey(currentUser) && roomData?.hostUserId === getCurrentUserKey(currentUser)) {
-          nextRoomData.hostColor = roomData?.hostColor || friendColorChoice || 'white';
-          nextRoomData.hostRole = nextRoomData.hostColor;
-        }
-        if (getCurrentUserKey(currentUser) && roomData?.guestUserId === getCurrentUserKey(currentUser)) {
-          nextRoomData.guestColor = roomData?.guestColor || (nextRoomData.hostColor === 'white' ? 'black' : 'white');
-          nextRoomData.guestRole = nextRoomData.guestColor;
+        if (!roomData?.setupConfig) {
+          nextRoomPatch.setupConfig = {
+            variant: setupConfig.variant,
+            timeControl: setupConfig.timeControl,
+            assistModes: sanitizeAssistModes(setupConfig.assistModes),
+          };
         }
 
-        await set(roomRef, nextRoomData);
-        const myColor = resolveFriendColorForCurrentUser(nextRoomData, getCurrentUserKey(currentUser) || null, friendColorChoice || 'white');
-        setFriendIsHost(Boolean(getCurrentUserKey(currentUser) && nextRoomData.hostUserId && nextRoomData.hostUserId === getCurrentUserKey(currentUser)));
+        if (currentUserId && roomData?.hostUserId === currentUserId) {
+          nextRoomPatch.hostColor = roomData?.hostColor || friendColorChoice || 'white';
+          nextRoomPatch.hostRole = nextRoomPatch.hostColor;
+        }
+        if (currentUserId && roomData?.guestUserId === currentUserId) {
+          nextRoomPatch.guestColor = roomData?.guestColor || (nextRoomPatch.hostColor === 'white' ? 'black' : 'white');
+          nextRoomPatch.guestRole = nextRoomPatch.guestColor;
+        }
+
+        await update(roomRef, nextRoomPatch);
+        const mergedRoomData = {
+          ...roomData,
+          ...nextRoomPatch,
+          setupConfig: nextRoomPatch.setupConfig || roomData?.setupConfig,
+        };
+        const myColor = resolveFriendColorForCurrentUser(mergedRoomData, currentUserId, friendColorChoice || 'white');
+        setFriendIsHost(Boolean(currentUserId && mergedRoomData.hostUserId && mergedRoomData.hostUserId === currentUserId));
         setFriendRole(myColor);
         setBoardOrientation(myColor);
       } catch (error) {
@@ -2815,8 +2823,7 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
       try {
         const snapshot = await get(roomRef);
         const roomData = snapshot.exists() ? snapshot.val() : {};
-        await set(roomRef, {
-          ...roomData,
+        await update(roomRef, {
           status: 'cancelled',
           cancelledAt: Date.now(),
           cancelledBy: currentUserId || 'unknown',
@@ -2851,17 +2858,14 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
         if (!roomRef) return;
         const snapshot = await get(roomRef);
         if (cancelled) return;
-        const roomData = snapshot.exists() ? snapshot.val() : {};
-        const nextRoomData = {
-          ...roomData,
+        await update(roomRef, {
           setupConfig: {
             variant: setupConfig.variant,
             timeControl: setupConfig.timeControl,
             assistModes: sanitizeAssistModes(setupConfig.assistModes),
           },
           updatedAt: Date.now(),
-        };
-        await set(roomRef, nextRoomData);
+        });
       } catch (error) {
         console.error('Failed to sync host setup config', error);
       }
@@ -2889,16 +2893,14 @@ function FreestyleChessTab({ onBack, boardTheme, experienceSettings, onRecordGam
     ? (friendSetup.inviteCode || friendSetup.joinCode || 'UNSET')
     : '';
 
-  const friendConnectionText = friendConnectionStatus === 'hosting' || friendConnectionStatus === 'waiting'
+  const friendConnectionText = friendConnectionStatus === 'hosting' || friendConnectionStatus === 'waiting' || friendConnectionStatus === 'connecting'
     ? 'Waiting for opponent…'
     : friendConnectionStatus === 'connected'
       ? 'Connected'
-      : friendConnectionStatus === 'connecting'
-        ? 'Connecting…'
-        : 'Not connected';
+      : 'Not connected';
 
   const friendStatusMessage = friendSetup.joinError || (
-    friendFlowMode === 'generate' && (
+    (friendFlowMode === 'generate' || friendFlowMode === 'join') && (
       friendConnectionStatus === 'waiting' ||
       friendConnectionStatus === 'hosting' ||
       friendConnectionStatus === 'connecting'
